@@ -1,7 +1,6 @@
 ignoredBuiltDependencies:
   - '@thaunknown/yencode'
   - bufferutil
-  - electron
   - node-datachannel
   - protobufjs
   - utf-8-validate
@@ -9,4 +8,5 @@ ignoredBuiltDependencies:
 
 onlyBuiltDependencies:
   - '@paymoapp/electron-shutdown-handler'
+  - electron
   - esbuild

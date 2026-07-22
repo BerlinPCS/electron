@@ -42,7 +42,7 @@ autoUpdater.logger = log
 // const TRANSPARENCY = store.get('transparency')
 
 // const BASE_URL = is.dev ? 'http://localhost:7344/' : 'https://hayase.app/'
-const BASE_URL = 'https://hayase.app/'
+const BASE_URL = 'http://localhost:7344/'
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'https', privileges: { standard: true, bypassCSP: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: false, stream: true, codeCache: true, secure: true } }
@@ -405,6 +405,11 @@ export default class App {
   hasDOH = false
   setDOH (dns: string) {
     try {
+      if (!dns) {
+        app.configureHostResolver({ secureDnsMode: 'off' })
+        this.hasDOH = false
+        return
+      }
       app.configureHostResolver({
         secureDnsMode: 'secure',
         secureDnsServers: [dns]

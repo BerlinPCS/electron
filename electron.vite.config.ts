@@ -9,6 +9,10 @@ import { cjsInterop } from 'vite-plugin-cjs-interop'
 
 import type { Plugin } from 'vite'
 
+// Some Electron-hosted terminals export this flag to child processes. It would
+// make the development Electron process start as plain Node instead of a GUI.
+delete process.env.ELECTRON_RUN_AS_NODE
+
 const pkgName = (pkg: string) => pkg.replace(/@/g, '').replace(/\//g, '-')
 
 const nativeModuleDir = (pkg: string) => `native-modules/${pkgName(pkg)}`
@@ -153,8 +157,9 @@ const electronUnzipPlugin = () => {
   return {
     name: 'electron-unzip',
     buildStart () {
-      // skip on dev
-      // if (process.env.NODE_ENV === 'development') return
+      // Development uses the standard Electron binary installed from npm.
+      // electron-dist is only needed for packaged production builds.
+      if (process.env.NODE_ENV === 'development') return
       const electronDistPath = resolve(__dirname, 'electron-dist')
 
       let zipPattern: string
