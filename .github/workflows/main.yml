@@ -36,6 +36,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Ensure Electron runtime is installed
+        run: |
+          pnpm rebuild electron
+          node -e "const fs = require('node:fs'); const electron = require('electron'); if (!fs.existsSync(electron)) throw new Error('Electron runtime was not installed: ' + electron)"
+
       - name: Validate release configuration
         shell: bash
         env:
