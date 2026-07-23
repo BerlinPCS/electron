@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
 
 const projectRoot = resolve(import.meta.dirname, '..')
-const sourceDir = join(projectRoot, 'vendor', 'hoshidicts')
+const sourceDir = join(projectRoot, 'native', 'hoshidicts-sidecar')
+const hoshidictsDir = join(projectRoot, 'vendor', 'hoshidicts')
 const platformArch = `${process.platform}-${process.arch}`
-const buildDir = join(projectRoot, '.sidecar-build', platformArch)
+const buildDir = join(projectRoot, '.sidecar-build', `wrapper-${platformArch}`)
 const executableName = `hoshidicts-sidecar${process.platform === 'win32' ? '.exe' : ''}`
 const outputDir = join(projectRoot, 'resources', 'sidecars')
 const outputPath = join(outputDir, executableName)
@@ -16,10 +17,10 @@ const buildEnvironment = {
   CCACHE_TEMPDIR: process.env.CCACHE_TEMPDIR ?? join(projectRoot, '.sidecar-build', 'ccache-tmp')
 }
 
-if (!existsSync(join(sourceDir, 'CMakeLists.txt'))) {
+if (!existsSync(join(hoshidictsDir, 'CMakeLists.txt'))) {
   throw new Error('Hoshidicts submodule is missing. Run: git submodule update --init --recursive')
 }
-if (!existsSync(join(sourceDir, 'external', 'glaze', 'CMakeLists.txt'))) {
+if (!existsSync(join(hoshidictsDir, 'external', 'glaze', 'CMakeLists.txt'))) {
   throw new Error('Hoshidicts dependencies are missing. Run: git submodule update --init --recursive')
 }
 
@@ -49,8 +50,10 @@ if (!builtPath) {
 }
 
 mkdirSync(outputDir, { recursive: true })
-copyFileSync(builtPath, outputPath)
-if (process.platform !== 'win32') chmodSync(outputPath, 0o755)
+const temporaryOutputPath = `${outputPath}.new`
+copyFileSync(builtPath, temporaryOutputPath)
+if (process.platform !== 'win32') chmodSync(temporaryOutputPath, 0o755)
+renameSync(temporaryOutputPath, outputPath)
 console.log(`Packaged Hoshidicts sidecar: ${outputPath}`)
 
 /**
