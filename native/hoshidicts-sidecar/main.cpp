@@ -955,6 +955,26 @@ struct QueryBundle {
   QueryBundle() : lookup(query, deinflector) {}
 };
 
+std::string base64_encode(const char *data, std::size_t size) {
+  static constexpr char alphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string output;
+  output.reserve(((size + 2) / 3) * 4);
+  for (std::size_t offset = 0; offset < size; offset += 3) {
+    const uint32_t first = static_cast<unsigned char>(data[offset]);
+    const uint32_t second =
+        offset + 1 < size ? static_cast<unsigned char>(data[offset + 1]) : 0;
+    const uint32_t third =
+        offset + 2 < size ? static_cast<unsigned char>(data[offset + 2]) : 0;
+    const uint32_t value = (first << 16) | (second << 8) | third;
+    output.push_back(alphabet[(value >> 18) & 0x3f]);
+    output.push_back(alphabet[(value >> 12) & 0x3f]);
+    output.push_back(offset + 1 < size ? alphabet[(value >> 6) & 0x3f] : '=');
+    output.push_back(offset + 2 < size ? alphabet[value & 0x3f] : '=');
+  }
+  return output;
+}
+
 std::optional<std::size_t> utf8_offset_for_utf16(std::string_view text,
                                                  std::size_t target) {
   std::size_t byte = 0;
@@ -1300,13 +1320,16 @@ private:
                   {"backendVersion", "1.0.0"},
                   {"capabilities",
                    Json::Array{"lookup", "import", "term", "frequency", "pitch",
-                               "styles", "deinflection", "supersession"}},
+                               "media", "styles", "deinflection",
+                               "supersession"}},
               });
     } else if (method == "state") {
       send_result(id, state_json());
     } else if (method == "lookup") {
       enqueue_lookup(Command{
           .id = id, .method = std::move(method), .params = std::move(params)});
+    } else if (method == "media") {
+      send_result(id, perform_media(params));
     } else if (method == "import" || method == "setEnabled" ||
                method == "reorder" || method == "remove") {
       {
@@ -1418,6 +1441,36 @@ private:
     }
     return Json::Object{{"length", static_cast<uint64_t>(length)},
                         {"entries", std::move(entries)}};
+  }
+
+  Json perform_media(const Json &params) {
+    constexpr std::size_t maximum_media_size = 5 * 1024 * 1024;
+    const auto &object = require_object(params, "media params");
+    std::string dictionary = require_string(object, "dictionary");
+    std::string path = require_string(object, "path");
+    if (dictionary.empty() || dictionary.size() > 1024 || path.empty() ||
+        path.size() > 4096) {
+      throw SidecarError("INVALID_PARAMS",
+                         "dictionary media identifiers are invalid");
+    }
+
+    std::shared_ptr<QueryBundle> bundle;
+    {
+      std::lock_guard lock(state_mutex_);
+      bundle = bundle_;
+    }
+    auto media = bundle->query.get_media_file(dictionary, path);
+    if (media.empty()) {
+      throw SidecarError("MEDIA_NOT_FOUND", "dictionary media was not found");
+    }
+    if (media.size() > maximum_media_size) {
+      throw SidecarError("MEDIA_TOO_LARGE",
+                         "dictionary media exceeds the 5 MiB limit");
+    }
+    return Json::Object{
+        {"data", base64_encode(media.data(), media.size())},
+        {"size", static_cast<uint64_t>(media.size())},
+    };
   }
 
   void admin_loop() {

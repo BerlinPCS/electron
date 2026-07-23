@@ -97,6 +97,28 @@ export default class HoshidictsSupervisor {
     return normalizeLookupResult(await client.requestLatestLookup<unknown>(request))
   }
 
+  async media (dictionary: string, path: string): Promise<Buffer> {
+    if (typeof dictionary !== 'string' || !dictionary || dictionary.length > 1024 ||
+        typeof path !== 'string' || !path || path.length > 4096) {
+      throw new HoshidictsError({ code: 'INVALID_REQUEST', message: 'Dictionary media identifiers are invalid' })
+    }
+    await this.start()
+    const result = protocolRecord(
+      await this.request<unknown>('media', { dictionary, path }),
+      'dictionary media'
+    )
+    const data = protocolString(result.data, 'dictionary media data')
+    const size = protocolNumber(result.size, 'dictionary media size')
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+      throw new HoshidictsError({ code: 'PROTOCOL_ERROR', message: 'Dictionary backend returned invalid media data' })
+    }
+    const media = Buffer.from(data, 'base64')
+    if (media.length !== size) {
+      throw new HoshidictsError({ code: 'PROTOCOL_ERROR', message: 'Dictionary backend returned invalid media size' })
+    }
+    return media
+  }
+
   async import (paths: string[]): Promise<MiningDictionaryState> {
     if (!paths.length) return await this.state()
     await this.start()

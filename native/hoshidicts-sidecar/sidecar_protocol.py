@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
+import base64
 import json
 import pathlib
 import subprocess
@@ -43,6 +44,7 @@ class Sidecar:
 
 
 def make_dictionary(path):
+    media = b"\x89PNG\r\n\x1a\nHayase dictionary media"
     files = {
         "index.json": {"title": "Hayase Test Dictionary", "revision": "1", "format": 3},
         "term_bank_1.json": [
@@ -57,6 +59,7 @@ def make_dictionary(path):
         for name, value in files.items():
             archive.writestr(name, json.dumps(value, ensure_ascii=False))
         archive.writestr("styles.css", ".glossary-content { color: rgb(1, 2, 3); }")
+        archive.writestr("media/test.png", media)
 
 def make_frequency_dictionary(path):
     with zipfile.ZipFile(path, "w") as archive:
@@ -98,7 +101,7 @@ def main():
         sidecar = Sidecar(executable, root)
         hello = sidecar.send(1, "hello", {"protocolVersion": 1})["result"]
         assert hello["protocolVersion"] == 1
-        assert {"lookup", "import", "frequency", "pitch", "supersession"} <= set(hello["capabilities"])
+        assert {"lookup", "import", "frequency", "pitch", "media", "supersession"} <= set(hello["capabilities"])
 
         state = sidecar.send(2, "state")["result"]
         assert state["available"] is True
@@ -114,7 +117,7 @@ def main():
 
         imported = sidecar.send(3, "import", {"paths": [str(dictionary_zip)]})["result"]
         dictionary = imported["dictionaries"][0]
-        assert dictionary["counts"] == {"term": 1, "frequency": 1, "pitch": 1, "media": 0}
+        assert dictionary["counts"] == {"term": 1, "frequency": 1, "pitch": 1, "media": 1}
         assert imported["order"] == {
             "term": [dictionary["id"]],
             "frequency": [dictionary["id"]],
@@ -153,8 +156,23 @@ def main():
         assert entry["frequencies"][0]["frequencies"][0] == {"value": 42, "displayValue": "42"}
         assert entry["pitches"][0]["pitchPositions"] == [2]
 
-        invalid_offset = sidecar.send(
+        media = sidecar.send(
             6,
+            "media",
+            {"dictionary": "Hayase Test Dictionary", "path": "media/test.png"},
+        )["result"]
+        assert base64.b64decode(media["data"]) == b"\x89PNG\r\n\x1a\nHayase dictionary media"
+        assert media["size"] == 31
+        missing_media = sidecar.send(
+            7,
+            "media",
+            {"dictionary": "Hayase Test Dictionary", "path": "media/missing.png"},
+            allow_error=True,
+        )
+        assert missing_media["error"]["code"] == "MEDIA_NOT_FOUND"
+
+        invalid_offset = sidecar.send(
+            8,
             "lookup",
             {"text": "😀食べました", "offset": 1, "scanLength": 16, "maxResults": 8},
             allow_error=True,
@@ -162,36 +180,36 @@ def main():
         assert invalid_offset["error"]["code"] == "INVALID_OFFSET"
 
         disabled = sidecar.send(
-            7, "setEnabled", {"id": dictionary["id"], "kind": "term", "enabled": False}
+            9, "setEnabled", {"id": dictionary["id"], "kind": "term", "enabled": False}
         )["result"]
         assert disabled["dictionaries"][0]["enabled"]["term"] is False
         no_results = sidecar.send(
-            8,
+            10,
             "lookup",
             {"text": "食べました", "offset": 0, "scanLength": 16, "maxResults": 8},
         )["result"]
         assert no_results["entries"] == []
-        sidecar.send(9, "setEnabled", {"id": dictionary["id"], "kind": "term", "enabled": True})
-        sidecar.send(10, "reorder", {"kind": "term", "ids": [dictionary["id"]]})
-        sidecar.close(11)
+        sidecar.send(11, "setEnabled", {"id": dictionary["id"], "kind": "term", "enabled": True})
+        sidecar.send(12, "reorder", {"kind": "term", "ids": [dictionary["id"]]})
+        sidecar.close(13)
 
         # Manifest state and query data survive a complete sidecar restart.
         sidecar = Sidecar(executable, root)
-        persisted = sidecar.send(12, "state")["result"]
+        persisted = sidecar.send(14, "state")["result"]
         assert persisted["dictionaries"][0]["title"] == "Hayase Test Dictionary"
         assert sidecar.send(
-            13,
+            15,
             "lookup",
             {"text": "食べました", "offset": 0, "scanLength": 16, "maxResults": 8},
         )["result"]["entries"]
-        sidecar.send(14, "remove", {"id": dictionary["id"]})
-        remaining = sidecar.send(15, "state")["result"]["dictionaries"]
-        for request_id, item in enumerate(remaining, start=16):
+        sidecar.send(16, "remove", {"id": dictionary["id"]})
+        remaining = sidecar.send(17, "state")["result"]["dictionaries"]
+        for request_id, item in enumerate(remaining, start=18):
             sidecar.send(request_id, "remove", {"id": item["id"]})
-        removed = sidecar.send(20, "state")["result"]
+        removed = sidecar.send(22, "state")["result"]
         assert removed["dictionaries"] == []
         assert any((root / ".trash").iterdir())
-        sidecar.close(21)
+        sidecar.close(23)
 
         assert (root / "manifest.json").is_file()
         assert (root / "data").is_dir()

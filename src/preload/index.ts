@@ -118,6 +118,11 @@ const native: Partial<Native> = {
   miningDictionarySetEnabled: (id, kind, enabled) => main.miningDictionarySetEnabled(id, kind, enabled),
   miningDictionaryReorder: (kind, ids) => main.miningDictionaryReorder(kind, ids),
   miningDictionaryRemove: id => main.miningDictionaryRemove(id),
+  miningAudioLocalState: () => main.miningAudioLocalState(),
+  miningAudioLocalImport: () => main.miningAudioLocalImport(),
+  miningAudioLocalRemove: () => main.miningAudioLocalRemove(),
+  miningAudioLocalReorder: sourceOrder => main.miningAudioLocalReorder(sourceOrder),
+  miningAudioResolveSource: (target, templates) => main.miningAudioResolveSource(target, templates),
   onMiningDictionaryEvent: (callback) => {
     const listener = (_event: IpcRendererEvent, data: MiningDictionaryEvent) => callback(data)
     ipcRenderer.on('mining-dictionary-event', listener)

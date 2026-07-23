@@ -19,6 +19,7 @@ import Discord from './discord.ts'
 import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/supervisor.ts'
 // import Protocol from './protocol.ts'
 import IPC from './ipc.ts'
+import { localAudioResponse, MiningAudioRepository } from './mining-audio.ts'
 import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
 import store from './store.ts'
@@ -46,7 +47,9 @@ autoUpdater.logger = log
 const BASE_URL = 'http://localhost:7344/'
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'https', privileges: { standard: true, bypassCSP: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: false, stream: true, codeCache: true, secure: true } }
+  { scheme: 'https', privileges: { standard: true, bypassCSP: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: false, stream: true, codeCache: true, secure: true } },
+  { scheme: 'hayase-dictionary-media', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  { scheme: 'hayase-local-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ])
 
 function setCors (record?: Record<string, string[]>, credentails = false) {
@@ -106,12 +109,49 @@ export default class App {
     }
   })
 
+  miningAudio = new MiningAudioRepository(join(app.getPath('userData'), 'mining', 'audio'))
+
   ipc = new IPC(this, this.torrentProcess, this.discord)
   tray = new Tray(process.platform === 'win32' ? ico : process.platform === 'darwin' ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : icon)
 
   unsafeUseInternalALAPI = process.argv.includes('--use-internal-al-api')
 
   constructor () {
+    protocol.handle('hayase-dictionary-media', async request => {
+      try {
+        const url = new URL(request.url)
+        if (url.hostname !== 'media') return new Response('Not found', { status: 404 })
+        const dictionary = url.searchParams.get('dictionary')
+        const mediaPath = url.searchParams.get('path')
+        if (!dictionary || !mediaPath) return new Response('Invalid dictionary media request', { status: 400 })
+        const media = await this.hoshidicts.media(dictionary, mediaPath)
+        return new Response(new Uint8Array(media), {
+          headers: {
+            'Cache-Control': 'no-store',
+            'Content-Type': dictionaryMediaContentType(mediaPath),
+            'Cross-Origin-Resource-Policy': 'cross-origin'
+          }
+        })
+      } catch (error) {
+        log.warn('[hoshidicts] dictionary media request failed:', error)
+        return new Response('Dictionary media not found', { status: 404 })
+      }
+    })
+    protocol.handle('hayase-local-audio', async request => {
+      try {
+        const url = new URL(request.url)
+        if (url.hostname !== 'audio') return new Response('Not found', { status: 404 })
+        const source = url.searchParams.get('source')
+        const file = url.searchParams.get('file')
+        if (!source || !file) return new Response('Invalid local audio request', { status: 400 })
+        const audio = await this.miningAudio.loadLocalAudio(source, file)
+        if (!audio) return new Response('Local audio not found', { status: 404 })
+        return localAudioResponse(audio, file, request.headers.get('range'))
+      } catch (error) {
+        log.warn('[mining-audio] local audio request failed:', error)
+        return new Response('Local audio not found', { status: 404 })
+      }
+    })
     this.hoshidicts.start().catch(error => log.warn('[hoshidicts] startup deferred:', error))
     if (store.data.doh) this.setDOH(store.data.doh)
     nativeTheme.themeSource = 'dark'
@@ -462,4 +502,21 @@ export default class App {
     } catch {}
     if (!this.updater.install(forceRunAfter)) app.quit()
   }
+}
+
+function dictionaryMediaContentType (path: string) {
+  const extension = path.split('.').pop()?.toLowerCase()
+  const contentTypes: Record<string, string> = {
+    apng: 'image/apng',
+    avif: 'image/avif',
+    bmp: 'image/bmp',
+    gif: 'image/gif',
+    ico: 'image/x-icon',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    png: 'image/png',
+    svg: 'image/svg+xml',
+    webp: 'image/webp'
+  }
+  return contentTypes[extension ?? ''] ?? 'application/octet-stream'
 }

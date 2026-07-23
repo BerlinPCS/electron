@@ -9,7 +9,7 @@
   "packageManager": "pnpm@10.28.1",
   "scripts": {
     "lint": "eslint --cache .",
-    "test:sidecar": "node --experimental-transform-types --test test/hoshidicts-client.test.mjs",
+    "test:sidecar": "node --experimental-transform-types --test test/*.test.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false --noEmit",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

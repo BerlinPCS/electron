@@ -156,6 +156,41 @@ export default class IPC {
     return this.app.hoshidicts.remove(id)
   }
 
+  miningAudioLocalState () {
+    return this.app.miningAudio.state()
+  }
+
+  async miningAudioLocalImport () {
+    const { filePaths, canceled } = await dialog.showOpenDialog(this.app.mainWindow, {
+      title: 'Select Hoshi local audio database',
+      buttonLabel: 'Import',
+      filters: [{ name: 'Hoshi Android audio database', extensions: ['db', 'sqlite', 'sqlite3'] }],
+      properties: ['openFile']
+    })
+    if (canceled || !filePaths[0]) return await this.app.miningAudio.state()
+    try {
+      return await this.app.miningAudio.importDatabase(filePaths[0])
+    } catch {
+      throw new Error('The selected file is not a supported Hoshi android.db audio database.')
+    }
+  }
+
+  miningAudioLocalRemove () {
+    return this.app.miningAudio.removeDatabase()
+  }
+
+  miningAudioLocalReorder (sourceOrder: string[]) {
+    if (!Array.isArray(sourceOrder) || sourceOrder.length > 128 ||
+        sourceOrder.some(source => typeof source !== 'string' || !source || source.length > 1024)) {
+      throw new Error('Local audio source order is invalid.')
+    }
+    return this.app.miningAudio.reorderSources(sourceOrder)
+  }
+
+  miningAudioResolveSource (target: string, templates: string[]) {
+    return this.app.miningAudio.resolveSource(target, templates)
+  }
+
   setAngle (angle: string) {
     const current = store.get('angle')
     if (current === angle) return
