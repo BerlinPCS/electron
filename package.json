@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "6.4.91",
+  "version": "6.4.92",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
@@ -53,11 +53,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@vladfrangu/async_event_emitter": "npm:@vladfrangu/async_event_emitter@2.4.6",
-      "@electron/fuses": "npm:@thaunknown/fuses"
-    },
-    "patchedDependencies": {
-      "app-builder-lib@26.11.1": "patches/app-builder-lib@26.11.1.patch"
+      "@vladfrangu/async_event_emitter": "npm:@vladfrangu/async_event_emitter@2.4.6"
     }
   }
 }

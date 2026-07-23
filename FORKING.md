@@ -75,9 +75,9 @@ must match:
 pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run lint
-git tag v6.4.91
+git tag v6.4.92
 git push origin main
-git push origin v6.4.91
+git push origin v6.4.92
 ```
 
 GitHub Actions currently builds and publishes only the Windows x64 NSIS
