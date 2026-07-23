@@ -10,35 +10,18 @@ permissions:
 
 jobs:
   release:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: windows-latest
 
     steps:
-      - name: Install Setuptools for Python
-        if: matrix.os == 'macos-latest'
-        run: pip3 install setuptools --break-system-packages
-
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: 'false'
           lfs: 'false'
-    
-      - name: Pull OS-specific LFS files
-        run: |
-          cd electron-dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            git lfs pull --include="*win32*.zip"
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            git lfs pull --include="*linux*.zip"
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            git lfs pull --include="*darwin*.zip"
-          fi
-        shell: bash
-    
+
+      - name: Check out hoshidicts
+        run: git submodule update --init --recursive vendor/hoshidicts
+
       - name: Setup PNPM
         uses: pnpm/action-setup@v4
 
@@ -62,23 +45,9 @@ jobs:
           fi
 
       - name: Build and Publish
-        if: matrix.os != 'macos-latest'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run build:publish
-
-      - name: Build and Publish (MacOS)
-        if: matrix.os == 'macos-latest'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.APPLE_SIGNING_CERT }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_SIGNING_PASSWORD }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         run: npm run build:publish

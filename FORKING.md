@@ -75,33 +75,30 @@ must match:
 pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run lint
-git tag v6.4.86
+git tag v6.4.87
 git push origin main
-git push origin v6.4.86
+git push origin v6.4.87
 ```
 
-GitHub Actions builds on Windows, macOS, and Ubuntu and uploads each platform's
-artifacts to one GitHub release. Linux produces AppImage and Debian packages;
-Windows produces an NSIS installer; macOS produces the default universal
-targets.
+GitHub Actions currently builds and publishes only the Windows x64 NSIS
+installer. The macOS and Linux electron-builder targets remain available if
+multi-platform releases are needed later.
 
 ### Signing secrets
 
 For trusted public distribution, configure repository Actions secrets:
 
-- macOS: `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`,
-  `APPLE_SIGNING_CERT`, and `APPLE_SIGNING_PASSWORD`
 - Windows: `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
 
-Never commit signing certificates or passwords. macOS direct distribution
-requires Apple Developer ID signing and notarization. Windows can be shipped
-unsigned for testing, but users will see SmartScreen warnings; signing is
-strongly recommended for releases and reliable update trust.
+Never commit signing certificates or passwords. Windows can be shipped unsigned
+for testing, but users will see SmartScreen warnings; signing is strongly
+recommended for releases and reliable update trust.
 
 ## Remaining upstream dependencies
 
-The `native` and `torrent-client` packages, the `electron-dist` submodule, and
-several hosted APIs still point at Hayase-owned projects. That does not prevent
-side-by-side installation. Fork and repoint them only when you need operational
-control or when upstream compatibility becomes a problem; doing so increases
-the maintenance burden.
+The `native` and `torrent-client` packages and several hosted APIs still point
+at Hayase-owned projects. The legacy `electron-dist` gitlink remains in the
+repository but is no longer checked out or used by the build. Fork and repoint
+the remaining dependencies only when you need operational control or when
+upstream compatibility becomes a problem; doing so increases the maintenance
+burden.

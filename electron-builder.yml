@@ -112,7 +112,6 @@ publish:
   provider: github
   owner: BerlinPCS
   repo: electron
-electronDist: electron-dist
 protocols:
   - name: hayatan
     schemes:
