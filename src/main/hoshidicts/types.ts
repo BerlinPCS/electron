@@ -94,8 +94,18 @@ export interface MiningDictionaryImportProgress {
   total: number
 }
 
+export interface MiningDictionaryImportError {
+  operationId: string
+  fileIndex: number
+  fileCount: number
+  fileName: string
+  code: string
+  message: string
+}
+
 export type MiningDictionaryEvent =
   | { event: 'importProgress', data: MiningDictionaryImportProgress }
+  | { event: 'importError', data: MiningDictionaryImportError }
   | { event: 'stateChanged', data: MiningDictionaryState }
   | { event: 'backendError', data: { code: string, message: string } }
 

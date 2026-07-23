@@ -102,7 +102,7 @@ export default class HoshidictsSupervisor {
     await this.start()
     for (const path of paths) this.activeImportPaths.add(path)
     try {
-      return this.notifyStateChanged(normalizeState(await this.request<unknown>('import', { paths })))
+      return this.notifyStateChanged(normalizeState(await this.request<unknown>('import', { paths }, 0)))
     } finally {
       for (const path of paths) this.activeImportPaths.delete(path)
     }
@@ -112,7 +112,7 @@ export default class HoshidictsSupervisor {
     validateId(id)
     validateKind(kind)
     await this.start()
-    return this.notifyStateChanged(normalizeState(await this.request<unknown>('setEnabled', { id, kind, enabled })))
+    return this.notifyStateChanged(normalizeState(await this.request<unknown>('setEnabled', { id, kind, enabled }, 0)))
   }
 
   async reorder (kind: MiningDictionaryKind, ids: string[]): Promise<MiningDictionaryState> {
@@ -124,13 +124,13 @@ export default class HoshidictsSupervisor {
       throw new HoshidictsError({ code: 'INVALID_REQUEST', message: 'Dictionary order contains duplicate ids' })
     }
     await this.start()
-    return this.notifyStateChanged(normalizeState(await this.request<unknown>('reorder', { kind, ids })))
+    return this.notifyStateChanged(normalizeState(await this.request<unknown>('reorder', { kind, ids }, 0)))
   }
 
   async remove (id: string): Promise<MiningDictionaryState> {
     validateId(id)
     await this.start()
-    return this.notifyStateChanged(normalizeState(await this.request<unknown>('remove', { id })))
+    return this.notifyStateChanged(normalizeState(await this.request<unknown>('remove', { id }, 0)))
   }
 
   async shutdown () {
@@ -200,10 +200,10 @@ export default class HoshidictsSupervisor {
     }
   }
 
-  private async request<T> (method: string, params: unknown = {}): Promise<T> {
+  private async request<T> (method: string, params: unknown = {}, timeoutMs?: number): Promise<T> {
     const client = this.client
     if (!client) throw new HoshidictsError({ code: 'BACKEND_UNAVAILABLE', message: 'Dictionary backend is unavailable' })
-    return await client.request<T>(method, params)
+    return await client.request<T>(method, params, timeoutMs)
   }
 
   private handleExit (
@@ -259,6 +259,19 @@ export default class HoshidictsSupervisor {
           phase: stringValue(data.phase),
           completed: numberValue(data.completed),
           total: numberValue(data.total)
+        }
+      })
+    } else if (event.event === 'importError' && isRecord(event.data)) {
+      const data = event.data
+      this.options.onEvent({
+        event: 'importError',
+        data: {
+          operationId: stringValue(data.operationId),
+          fileIndex: numberValue(data.fileIndex),
+          fileCount: numberValue(data.fileCount),
+          fileName: basename(stringValue(data.fileName ?? data.file)),
+          code: stringValue(data.code) || 'IMPORT_FAILED',
+          message: this.sanitizeMessage(stringValue(data.message) || 'Dictionary import failed')
         }
       })
     } else if (event.event === 'stateChanged' && isRecord(event.data)) {
