@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "6.4.89",
+  "version": "6.4.90",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
@@ -17,12 +17,12 @@
     "start": "electron-vite preview",
     "dev": "npm run build:sidecar && electron-vite dev --watch",
     "rebuild": "electron-rebuild -f -w yencode",
-    "build": "electron-vite build",
-    "build:publish": "npm run build:sidecar && npm run build && electron-builder -p always",
-    "build:unpack": "npm run build:sidecar && npm run build && electron-builder --dir",
-    "build:win": "npm run build:sidecar && npm run build && electron-builder --win",
-    "build:mac": "npm run build:sidecar && npm run build && electron-builder --mac",
-    "build:linux": "npm run build:sidecar && npm run build && electron-builder --linux"
+    "build": "npm run build:sidecar && electron-vite build",
+    "build:publish": "npm run build && electron-builder -p always",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

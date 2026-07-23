@@ -76,12 +76,25 @@ target_include_directories(hoshidicts PRIVATE
 
 # Upstream importer.hpp currently uses uint64_t without including <cstdint>.
 # Supply it from the consuming build until that header is fixed upstream.
-target_precompile_headers(hoshidicts PRIVATE <cstdint>)
+target_precompile_headers(hoshidicts PRIVATE
+    <cstdint>
+    "${CMAKE_CURRENT_SOURCE_DIR}/ranges_to_compat.hpp"
+)
 
 # MSVC otherwise treats source as the active Windows code page and reports its
 # legacy C++ version, breaking Japanese char32_t literals and utfcpp overloads.
 if(MSVC)
     target_compile_options(hoshidicts PRIVATE /utf-8 /Zc:__cplusplus)
+endif()
+
+# GCC implemented the C++23 ranges::to adaptor in version 14. Keep the pinned
+# Hoshidicts sources buildable with GCC 13 toolchains (including CLion's
+# bundled MinGW) without modifying the submodule.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    target_compile_definitions(hoshidicts PRIVATE
+        HAYASE_NEEDS_RANGES_TO_COMPAT=1
+    )
 endif()
 
 find_package(Threads REQUIRED)
@@ -98,6 +111,16 @@ target_link_libraries(hoshidicts-sidecar PRIVATE
     hoshidicts
     Threads::Threads
 )
+
+# The sidecar is packaged as a single executable. Avoid runtime dependencies
+# on MinGW DLLs that electron-builder does not copy beside it.
+if(MINGW)
+    target_link_options(hoshidicts-sidecar PRIVATE
+        -static
+        -static-libgcc
+        -static-libstdc++
+    )
+endif()
 
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter)
