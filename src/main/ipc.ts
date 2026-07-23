@@ -7,10 +7,12 @@ import { app, dialog, shell, type UtilityProcess, ipcMain, systemPreferences } f
 import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
+import { HoshidictsError } from './hoshidicts/client.ts'
 import store from './store'
 
 import type App from './app'
 import type Discord from './discord'
+import type { MiningDictionaryKind, MiningDictionaryLookupRequest } from './hoshidicts/types.ts'
 import type { SessionMetadata, ClientSettings } from 'native'
 
 const WHITELISTED_URLS = ['https://anilist.co/', 'https://github.com/sponsors/ThaUnknown/', 'https://myanimelist.net/', 'https://miru.watch', 'https://hayase.app', 'https://hayase.watch', 'https://thewiki.moe', 'https://kitsu.app']
@@ -117,6 +119,43 @@ export default class IPC {
     return path
   }
 
+  miningDictionaryState () {
+    return this.app.hoshidicts.state()
+  }
+
+  miningDictionaryLookup (request: MiningDictionaryLookupRequest) {
+    return this.app.hoshidicts.lookup(request)
+  }
+
+  async miningDictionaryImport () {
+    const { filePaths, canceled } = await dialog.showOpenDialog(this.app.mainWindow, {
+      title: 'Import Yomitan dictionaries',
+      buttonLabel: 'Import',
+      filters: [{ name: 'Yomitan dictionary ZIPs', extensions: ['zip'] }],
+      properties: ['openFile', 'multiSelections']
+    })
+
+    if (canceled || filePaths.length === 0) return await this.app.hoshidicts.state()
+
+    try {
+      return await this.app.hoshidicts.import(filePaths)
+    } catch (error) {
+      throw sanitizeImportError(error, filePaths)
+    }
+  }
+
+  miningDictionarySetEnabled (id: string, kind: MiningDictionaryKind, enabled: boolean) {
+    return this.app.hoshidicts.setEnabled(id, kind, enabled)
+  }
+
+  miningDictionaryReorder (kind: MiningDictionaryKind, ids: string[]) {
+    return this.app.hoshidicts.reorder(kind, ids)
+  }
+
+  miningDictionaryRemove (id: string) {
+    return this.app.hoshidicts.remove(id)
+  }
+
   setAngle (angle: string) {
     const current = store.get('angle')
     if (current === angle) return
@@ -210,4 +249,13 @@ export default class IPC {
     })
     // this.dispatch('open', `intent://localhost:${this.server.address().port}${found.streamURL}#Intent;type=video/any;scheme=http;end;`)
   }
+}
+
+function sanitizeImportError (error: unknown, paths: string[]) {
+  const code = error instanceof HoshidictsError ? error.code : 'IMPORT_FAILED'
+  let message = error instanceof Error ? error.message : 'Dictionary import failed'
+  for (const path of paths) {
+    message = message.replaceAll(path, basename(path))
+  }
+  return new HoshidictsError({ code, message })
 }

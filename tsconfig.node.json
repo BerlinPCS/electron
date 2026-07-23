@@ -3,6 +3,8 @@
   "include": [
     "electron.vite.config.*",
     "eslint.config.mjs",
+    "scripts/**/*",
+    "test/**/*",
     "src/main/**/*",
     "src/preload/**/*",
     "src/main/background/**/*"

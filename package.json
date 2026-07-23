@@ -9,18 +9,20 @@
   "packageManager": "pnpm@10.28.1",
   "scripts": {
     "lint": "eslint --cache .",
+    "test:sidecar": "node --experimental-transform-types --test test/hoshidicts-client.test.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false --noEmit",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "build:sidecar": "node scripts/build-hoshidicts.mjs",
     "start": "electron-vite preview",
-    "dev": "electron-vite dev --watch",
+    "dev": "npm run build:sidecar && electron-vite dev --watch",
     "rebuild": "electron-rebuild -f -w yencode",
     "build": "electron-vite build",
-    "build:publish": "npm run build && electron-builder -p always",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "build:publish": "npm run build:sidecar && npm run build && electron-builder -p always",
+    "build:unpack": "npm run build:sidecar && npm run build && electron-builder --dir",
+    "build:win": "npm run build:sidecar && npm run build && electron-builder --win",
+    "build:mac": "npm run build:sidecar && npm run build && electron-builder --mac",
+    "build:linux": "npm run build:sidecar && npm run build && electron-builder --linux"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

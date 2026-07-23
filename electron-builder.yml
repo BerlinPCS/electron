@@ -17,6 +17,12 @@ asarUnpack:
   - resources/**
   - out/main/native-assets/**/*.node
   - out/main/native-modules/**/prebuilds/*/*.node
+extraResources:
+  - from: resources/sidecars
+    to: sidecars
+    filter:
+      - hoshidicts-sidecar
+      - hoshidicts-sidecar.exe
 files:
   - "!**/.vscode/*"
   - "!src/*"

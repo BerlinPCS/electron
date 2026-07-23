@@ -16,6 +16,7 @@ import './util.ts'
 import { rewriteInternalRequest } from './al.ts'
 import forkPath from './background/background.ts?modulePath'
 import Discord from './discord.ts'
+import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/supervisor.ts'
 // import Protocol from './protocol.ts'
 import IPC from './ipc.ts'
 import Plugins from './plugins.ts'
@@ -91,12 +92,27 @@ export default class App {
   plugins = new Plugins(this.mainWindow)
   updater = new Updater()
   discord = new Discord()
+  hoshidicts = new HoshidictsSupervisor({
+    executable: resolveHoshidictsExecutable({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged
+    }),
+    dictionaryRoot: join(app.getPath('userData'), 'mining', 'dictionaries'),
+    onEvent: event => {
+      if (!this.destroyed && !this.mainWindow.webContents.isDestroyed()) {
+        this.mainWindow.webContents.send('mining-dictionary-event', event)
+      }
+    }
+  })
+
   ipc = new IPC(this, this.torrentProcess, this.discord)
   tray = new Tray(process.platform === 'win32' ? ico : process.platform === 'darwin' ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : icon)
 
   unsafeUseInternalALAPI = process.argv.includes('--use-internal-al-api')
 
   constructor () {
+    this.hoshidicts.start().catch(error => log.warn('[hoshidicts] startup deferred:', error))
     if (store.data.doh) this.setDOH(store.data.doh)
     nativeTheme.themeSource = 'dark'
     expose(this.ipc, ipcMain, this.mainWindow.webContents as Messageable)
@@ -440,6 +456,9 @@ export default class App {
       this.torrentProcess.postMessage({ id: 'destroy' })
       await once(this.torrentProcess, 'exit', { signal: AbortSignal.timeout(5000) })
       this.torrentProcess.kill()
+    } catch {}
+    try {
+      await this.hoshidicts.shutdown()
     } catch {}
     if (!this.updater.install(forceRunAfter)) app.quit()
   }

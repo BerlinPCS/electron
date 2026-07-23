@@ -1,8 +1,9 @@
 import { proxy } from 'abslink'
 import { wrap } from 'abslink/electron'
 import { wrap as wrapPort } from 'abslink/w3c'
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
+import type { MiningDictionaryEvent } from '../main/hoshidicts/types.ts'
 import type IPC from '../main/ipc.ts'
 import type { Remote } from 'abslink'
 import type { Native } from 'native'
@@ -110,7 +111,18 @@ const native: Partial<Native> = {
   pluginList: () => main.app.plugins.list(),
   pluginPopup: (pluginId: string) => main.app.plugins.popup(pluginId),
   pluginImport: (id?: string) => main.app.plugins.import(id),
-  pluginDelete: (id: string) => main.app.plugins.delete(id)
+  pluginDelete: (id: string) => main.app.plugins.delete(id),
+  miningDictionaryState: () => main.miningDictionaryState(),
+  miningDictionaryLookup: request => main.miningDictionaryLookup(request),
+  miningDictionaryImport: () => main.miningDictionaryImport(),
+  miningDictionarySetEnabled: (id, kind, enabled) => main.miningDictionarySetEnabled(id, kind, enabled),
+  miningDictionaryReorder: (kind, ids) => main.miningDictionaryReorder(kind, ids),
+  miningDictionaryRemove: id => main.miningDictionaryRemove(id),
+  onMiningDictionaryEvent: (callback) => {
+    const listener = (_event: IpcRendererEvent, data: MiningDictionaryEvent) => callback(data)
+    ipcRenderer.on('mining-dictionary-event', listener)
+    return () => ipcRenderer.removeListener('mining-dictionary-event', listener)
+  }
 }
 
 try {

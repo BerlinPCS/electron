@@ -4,3 +4,6 @@ out
 .DS_Store
 .eslintcache
 *.log*
+.sidecar-build
+resources/sidecars/hoshidicts-sidecar
+resources/sidecars/hoshidicts-sidecar.exe

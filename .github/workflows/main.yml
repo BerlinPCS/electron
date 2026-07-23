@@ -22,7 +22,7 @@ jobs:
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
-          submodules: 'true'
+          submodules: 'recursive'
           lfs: 'false'
           token: ${{ secrets.MIRU_SUBMODULES_PAT }}
     

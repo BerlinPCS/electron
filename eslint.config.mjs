@@ -3,7 +3,7 @@ import config from 'eslint-config-standard-universal'
 import _globals from 'globals'
 
 export default tseslint.config(
-  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+  { ignores: ['**/node_modules', '**/dist', '**/out', '**/.sidecar-build', '**/vendor'] },
   // @ts-expect-error w/e
   ...config({
     ..._globals.node,

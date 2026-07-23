@@ -1,3 +1,6 @@
 [submodule "electron-dist"]
 	path = electron-dist
 	url = https://github.com/hayase-app/electron-dist
+[submodule "vendor/hoshidicts"]
+	path = vendor/hoshidicts
+	url = https://github.com/Manhhao/hoshidicts.git
