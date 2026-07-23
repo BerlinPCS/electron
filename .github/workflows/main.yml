@@ -20,7 +20,9 @@ jobs:
           lfs: 'false'
 
       - name: Check out hoshidicts
-        run: git submodule update --init --recursive vendor/hoshidicts
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive vendor/hoshidicts
 
       - name: Setup PNPM
         uses: pnpm/action-setup@v4
