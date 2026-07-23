@@ -1,5 +1,5 @@
-appId: com.github.thaunknown.miru
-productName: Hayase
+appId: com.github.berlinpcs.hayatan
+productName: Hayatan
 electronFuses:
   resetAdHocDarwinSignature: false
   runAsNode: false
@@ -45,13 +45,12 @@ files:
   - "!resources/*"
   - "!patches/*"
 win:
-  executableName: Hayase
+  executableName: Hayatan
   target:
     - target: nsis
       arch:
         - x64
   # signAndEditExecutable: true
-  verifyUpdateCodeSignature: false
   artifactName: ${os}-${name}-${version}-installer.${ext}
 nsis:
   artifactName: ${os}-${name}-${version}-installer.${ext}
@@ -97,26 +96,26 @@ linux:
     - target: AppImage
       arch:
         - x64
-  maintainer: ThaUnknown
+  maintainer: BerlinPCS
   category: AudioVideo;Video
   desktop:
     entry:
       Type: "Application"
       Encoding: "UTF-8"
-      Name: "Hayase"
-      Comment: "Bittorrent streaming software for cats"
+      Name: "Hayatan"
+      Comment: "Bittorrent streaming software for anime"
       Keywords: "anime"
       Terminal: "false"
-      MimeType: "x-scheme-handler/hayase;"
+      MimeType: "x-scheme-handler/hayatan;"
 npmRebuild: true
 publish:
   provider: github
-  owner: hayase-app
-  repo: docs
+  owner: BerlinPCS
+  repo: electron
 electronDist: electron-dist
 protocols:
-  - name: hayase
+  - name: hayatan
     schemes:
-      - hayase
+      - hayatan
 electronLanguages:
   - en-US

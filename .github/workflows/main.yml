@@ -2,9 +2,11 @@ name: Build/release
 
 on:
   push:
-    branches:
-      - 'main'
-      - 'master'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -24,7 +26,6 @@ jobs:
         with:
           submodules: 'recursive'
           lfs: 'false'
-          token: ${{ secrets.MIRU_SUBMODULES_PAT }}
     
       - name: Pull OS-specific LFS files
         run: |
@@ -50,17 +51,30 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate release configuration
+        shell: bash
+        env:
+          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
+        run: |
+          if [ -z "$MAIN_VITE_INTERFACE_URL" ]; then
+            echo "Set the HAYATAN_INTERFACE_URL repository variable before releasing."
+            exit 1
+          fi
+
       - name: Build and Publish
         if: matrix.os != 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.MIRU_SUBMODULES_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run build:publish
 
       - name: Build and Publish (MacOS)
         if: matrix.os == 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.MIRU_SUBMODULES_PAT }}
-          GH_TOKEN: ${{ secrets.MIRU_SUBMODULES_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

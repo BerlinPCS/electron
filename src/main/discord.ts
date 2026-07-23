@@ -45,7 +45,7 @@ export default class Discord {
 
   setDiscordRPC () {
     if (this.discord.user) {
-      const mediaUrl = this.allowDiscordDetails ? 'https://anilist.co/anime/' + this.mediaId : 'https://hayase.watch'
+      const mediaUrl = this.allowDiscordDetails ? 'https://anilist.co/anime/' + this.mediaId : 'https://github.com/BerlinPCS/electron'
       const mediaTitle = this.allowDiscordDetails ? this.session?.title ?? 'Anime' : 'Anime'
       const position = (this.position?.position ?? 0) * 1000
       const duration = (this.position?.duration ?? 0) * 1000
@@ -53,7 +53,7 @@ export default class Discord {
         pid: process.pid,
         activity: {
           type: 3,
-          name: 'Hayase',
+          name: 'Hayatan',
           state: this.allowDiscordDetails ? this.session?.description ?? 'Streaming anime torrents! 🍿' : 'Streaming anime torrents! 🍿',
           details: mediaTitle,
           details_url: mediaUrl,
@@ -66,17 +66,17 @@ export default class Discord {
             large_text: mediaTitle,
             large_url: mediaUrl,
             small_image: 'logo',
-            small_text: 'Watching on Hayase',
-            small_url: 'https://hayase.watch'
+            small_text: 'Watching on Hayatan',
+            small_url: 'https://github.com/BerlinPCS/electron'
           },
           buttons: [
             {
               label: 'Download app',
-              url: 'https://hayase.watch/download'
+              url: 'https://github.com/BerlinPCS/electron/releases/latest'
             },
             {
-              label: 'Watch on Hayase',
-              url: 'hayase://anime/' + this.mediaId
+              label: 'Watch on Hayatan',
+              url: 'hayatan://anime/' + this.mediaId
             }
           ],
           party: {

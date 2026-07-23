@@ -43,8 +43,9 @@ autoUpdater.logger = log
 
 // const TRANSPARENCY = store.get('transparency')
 
-// const BASE_URL = is.dev ? 'http://localhost:7344/' : 'https://hayase.app/'
-const BASE_URL = 'http://localhost:7344/'
+const BASE_URL = is.dev ? 'http://localhost:7344/' : import.meta.env.MAIN_VITE_INTERFACE_URL
+if (!BASE_URL) throw new Error('MAIN_VITE_INTERFACE_URL must be set for production builds')
+const BASE_ORIGIN = new URL(BASE_URL).origin
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'https', privileges: { standard: true, bypassCSP: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: false, stream: true, codeCache: true, secure: true } },
@@ -64,7 +65,7 @@ function setCors (record?: Record<string, string[]>, credentails = false) {
 export default class App {
   torrentProcess = utilityProcess.fork(forkPath, [], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    serviceName: 'Hayase Torrent Client'
+    serviceName: 'Hayatan Torrent Client'
   })
 
   mainWindow = new BrowserWindow({
@@ -78,7 +79,7 @@ export default class App {
     maximizable: true,
     fullscreenable: true,
     show: false,
-    title: 'Hayase',
+    title: 'Hayatan',
     backgroundColor: '#000000',
     icon,
     webPreferences: {
@@ -265,10 +266,10 @@ export default class App {
       callback(details)
     })
 
-    this.tray.setToolTip('Hayase')
+    this.tray.setToolTip('Hayatan')
     // this needs to be way better lol
     this.tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Hayase', enabled: false },
+      { label: 'Hayatan', enabled: false },
       { type: 'separator' },
       {
         label: 'Show App',
@@ -278,7 +279,7 @@ export default class App {
         }
       },
       { type: 'separator' },
-      { label: 'Exit Hayase', click: () => this.destroy() }
+      { label: 'Exit Hayatan', click: () => this.destroy() }
     ]))
     this.tray.on('click', () => {
       this.mainWindow.show()
@@ -334,7 +335,7 @@ export default class App {
     //   notification.show()
     // })
 
-    electronApp.setAppUserModelId('com.github.hayase-app')
+    electronApp.setAppUserModelId('com.github.berlinpcs.hayatan')
     if (process.platform === 'win32') {
       // this message usually fires in dev-mode from the parent process
       process.on('message', data => {
@@ -359,7 +360,7 @@ export default class App {
     })
     this.mainWindow.webContents.on('will-navigate', (e, url) => {
       const parsedUrl = new URL(url)
-      if (parsedUrl.origin !== BASE_URL) {
+      if (parsedUrl.origin !== BASE_ORIGIN) {
         e.preventDefault()
       }
     })
@@ -385,8 +386,8 @@ export default class App {
       if (reason === 'crashed') {
         if (++crashcount > 10) {
           // TODO
-          await dialog.showMessageBox({ message: 'Crashed too many times.', title: 'Hayase', detail: 'App crashed too many times. For a fix visit https://hayase.watch/faq/', icon })
-          shell.openExternal('https://hayase.watch/faq/')
+          await dialog.showMessageBox({ message: 'Crashed too many times.', title: 'Hayatan', detail: 'App crashed too many times. Please report this at https://github.com/BerlinPCS/electron/issues.', icon })
+          shell.openExternal('https://github.com/BerlinPCS/electron/issues')
         } else {
           app.relaunch()
         }
@@ -431,25 +432,25 @@ export default class App {
         items: [
           {
             type: 'task',
-            program: 'hayase://schedule/',
+            program: 'hayatan://schedule/',
             title: 'Airing Schedule',
             description: 'Open The Airing Schedule'
           },
           {
             type: 'task',
-            program: 'hayase://w2g/',
+            program: 'hayatan://w2g/',
             title: 'Watch Together',
             description: 'Create a New Watch Together Lobby'
           },
           {
             type: 'task',
-            program: 'hayase://donate/',
+            program: 'hayatan://donate/',
             title: 'Donate',
             description: 'Support This App'
           },
           {
             type: 'task',
-            program: 'hayase://devtools/',
+            program: 'hayatan://devtools/',
             title: 'Devtools',
             description: 'Open Devtools'
           }

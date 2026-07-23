@@ -1,11 +1,11 @@
 {
-  "name": "hayase",
+  "name": "hayatan",
   "version": "6.4.85",
-  "description": "Hayase - Torrent streaming made simple",
+  "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
-  "repository": "github:hayase-app/ui",
+  "repository": "github:BerlinPCS/electron",
   "author": "ThaUnknown_",
-  "homepage": "https://hayase.watch",
+  "homepage": "https://github.com/BerlinPCS/electron",
   "packageManager": "pnpm@10.28.1",
   "scripts": {
     "lint": "eslint --cache .",

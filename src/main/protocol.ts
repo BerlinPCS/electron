@@ -4,21 +4,21 @@ import { app, shell, type BrowserWindow } from 'electron'
 
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('hayase', process.execPath, [path.resolve(process.argv[1]!)])
+    app.setAsDefaultProtocolClient('hayatan', process.execPath, [path.resolve(process.argv[1]!)])
   }
 } else {
-  app.setAsDefaultProtocolClient('hayase')
+  app.setAsDefaultProtocolClient('hayatan')
 }
 
 export default class Protocol {
-  protocolRx = /hayase:\/\/([a-z0-9]+)\/(.*)/i
+  protocolRx = /hayatan:\/\/([a-z0-9]+)\/(.*)/i
 
   window
   constructor (window: BrowserWindow) {
     this.window = window
 
     // this is deprecated.... probably?
-    // protocol.registerHttpProtocol('hayase', (req) => {
+    // protocol.registerHttpProtocol('hayatan', (req) => {
     // const token = req.url.slice(7)
     // this.window.loadURL(development ? 'http://localhost:5000/app.html' + token : `file://${path.join(__dirname, '/app.html')}${token}`)
     // })
