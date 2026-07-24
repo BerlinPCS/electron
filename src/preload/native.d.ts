@@ -6,6 +6,18 @@ import type {
   MiningDictionaryState
 } from '../main/hoshidicts/types.ts'
 import type { HayaseMigrationState } from '../main/legacy-migration.ts'
+import type {
+  MiningAnkiAddRequest,
+  MiningAnkiAddResult,
+  MiningAnkiConnectionResult,
+  MiningAnkiDuplicateRequest,
+  MiningAnkiDuplicateResult,
+  MiningAnkiEvent,
+  MiningAnkiSettingsPatch,
+  MiningAnkiShowNotesRequest,
+  MiningAnkiShowNotesResult,
+  MiningAnkiState
+} from '../main/mining-anki.ts'
 import type { MiningLocalAudioState } from '../main/mining-audio.ts'
 
 declare module 'native' {
@@ -23,6 +35,14 @@ declare module 'native' {
     miningAudioLocalRemove: () => Promise<MiningLocalAudioState>
     miningAudioLocalReorder: (sourceOrder: string[]) => Promise<MiningLocalAudioState>
     miningAudioResolveSource: (target: string, templates: string[]) => Promise<string | null>
+    miningAnkiState: () => Promise<MiningAnkiState>
+    miningAnkiUpdateSettings: (patch: MiningAnkiSettingsPatch) => Promise<MiningAnkiState>
+    miningAnkiPing: () => Promise<MiningAnkiConnectionResult>
+    miningAnkiDetect: () => Promise<MiningAnkiState>
+    miningAnkiCheckDuplicate: (request: MiningAnkiDuplicateRequest) => Promise<MiningAnkiDuplicateResult>
+    miningAnkiAddNote: (request: MiningAnkiAddRequest) => Promise<MiningAnkiAddResult>
+    miningAnkiShowNotes: (request: MiningAnkiShowNotesRequest) => Promise<MiningAnkiShowNotesResult>
+    onMiningAnkiEvent: (callback: (event: MiningAnkiEvent) => void) => () => void
     onMiningDictionaryEvent: (callback: (event: MiningDictionaryEvent) => void) => () => void
   }
 }

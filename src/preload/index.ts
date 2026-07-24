@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import type { MiningDictionaryEvent } from '../main/hoshidicts/types.ts'
 import type IPC from '../main/ipc.ts'
+import type { MiningAnkiEvent } from '../main/mining-anki.ts'
 import type { Remote } from 'abslink'
 import type { Native } from 'native'
 import type TorrentClient from 'torrent-client'
@@ -125,6 +126,18 @@ const native: Partial<Native> = {
   miningAudioLocalRemove: () => main.miningAudioLocalRemove(),
   miningAudioLocalReorder: sourceOrder => main.miningAudioLocalReorder(sourceOrder),
   miningAudioResolveSource: (target, templates) => main.miningAudioResolveSource(target, templates),
+  miningAnkiState: () => main.miningAnkiState(),
+  miningAnkiUpdateSettings: patch => main.miningAnkiUpdateSettings(patch),
+  miningAnkiPing: () => main.miningAnkiPing(),
+  miningAnkiDetect: () => main.miningAnkiDetect(),
+  miningAnkiCheckDuplicate: request => main.miningAnkiCheckDuplicate(request),
+  miningAnkiAddNote: request => main.miningAnkiAddNote(request),
+  miningAnkiShowNotes: request => main.miningAnkiShowNotes(request),
+  onMiningAnkiEvent: (callback) => {
+    const listener = (_event: IpcRendererEvent, data: MiningAnkiEvent) => callback(data)
+    ipcRenderer.on('mining-anki-event', listener)
+    return () => ipcRenderer.removeListener('mining-anki-event', listener)
+  },
   onMiningDictionaryEvent: (callback) => {
     const listener = (_event: IpcRendererEvent, data: MiningDictionaryEvent) => callback(data)
     ipcRenderer.on('mining-dictionary-event', listener)

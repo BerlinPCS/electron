@@ -5,11 +5,14 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import log from 'electron-log/main'
 
+import { DEFAULT_MINING_ANKI_SETTINGS } from './mining-anki.ts'
+
 const DEFAULTS = {
   angle: 'default',
   player: '',
   torrentPath: '',
   doh: '',
+  miningAnki: DEFAULT_MINING_ANKI_SETTINGS,
   // transparency: false,
   torrentSettings: {
     torrentPersist: false,

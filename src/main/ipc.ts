@@ -14,6 +14,12 @@ import store from './store'
 import type App from './app'
 import type Discord from './discord'
 import type { MiningDictionaryKind, MiningDictionaryLookupRequest } from './hoshidicts/types.ts'
+import type {
+  MiningAnkiAddRequest,
+  MiningAnkiDuplicateRequest,
+  MiningAnkiSettingsPatch,
+  MiningAnkiShowNotesRequest
+} from './mining-anki.ts'
 import type { SessionMetadata, ClientSettings } from 'native'
 
 const WHITELISTED_URLS = [
@@ -223,6 +229,34 @@ export default class IPC {
 
   miningAudioResolveSource (target: string, templates: string[]) {
     return this.app.miningAudio.resolveSource(target, templates)
+  }
+
+  miningAnkiState () {
+    return this.app.miningAnki.state()
+  }
+
+  miningAnkiUpdateSettings (patch: MiningAnkiSettingsPatch) {
+    return this.app.miningAnki.updateSettings(patch)
+  }
+
+  miningAnkiPing () {
+    return this.app.miningAnki.ping()
+  }
+
+  miningAnkiDetect () {
+    return this.app.miningAnki.detect()
+  }
+
+  miningAnkiCheckDuplicate (request: MiningAnkiDuplicateRequest) {
+    return this.app.miningAnki.checkDuplicate(request)
+  }
+
+  miningAnkiAddNote (request: MiningAnkiAddRequest) {
+    return this.app.miningAnki.addNote(request)
+  }
+
+  miningAnkiShowNotes (request: MiningAnkiShowNotesRequest) {
+    return this.app.miningAnki.showNotes(request)
   }
 
   setAngle (angle: string) {

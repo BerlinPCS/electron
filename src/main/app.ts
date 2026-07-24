@@ -19,6 +19,7 @@ import Discord from './discord.ts'
 import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/supervisor.ts'
 // import Protocol from './protocol.ts'
 import IPC from './ipc.ts'
+import { mediaMimeType, MiningAnkiService } from './mining-anki.ts'
 import { localAudioResponse, MiningAudioRepository } from './mining-audio.ts'
 import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
@@ -111,6 +112,40 @@ export default class App {
   })
 
   miningAudio = new MiningAudioRepository(join(app.getPath('userData'), 'mining', 'audio'))
+  miningAnki = new MiningAnkiService({
+    read: () => store.get('miningAnki'),
+    write: settings => store.set('miningAnki', settings)
+  }, globalThis.fetch, {
+    loadDictionaryMedia: (dictionary, path) => this.hoshidicts.media(dictionary, path),
+    loadWordAudio: async source => {
+      const url = new URL(source)
+      if (url.protocol === 'hayase-local-audio:') {
+        if (url.hostname !== 'audio') throw new Error('Invalid local audio URL.')
+        const sourceName = url.searchParams.get('source')
+        const file = url.searchParams.get('file')
+        if (!sourceName || !file) throw new Error('Invalid local audio URL.')
+        const data = await this.miningAudio.loadLocalAudio(sourceName, file)
+        if (!data) throw new Error('Local word audio was not found.')
+        return { filename: file, mimeType: mediaMimeType(file), data }
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported word audio URL.')
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) throw new Error(`Word audio returned HTTP ${response.status}.`)
+      const data = new Uint8Array(await response.arrayBuffer())
+      if (data.byteLength > 100 * 1024 * 1024) throw new Error('Word audio exceeds 100 MiB.')
+      const candidateFilename = url.pathname.split('/').pop()
+      const filename = candidateFilename ?? 'hoshi_audio.mp3'
+      return {
+        filename,
+        mimeType: response.headers.get('content-type')?.split(';')[0] ?? mediaMimeType(filename),
+        data
+      }
+    }
+  }, event => {
+    if (!this.destroyed && !this.mainWindow.webContents.isDestroyed()) {
+      this.mainWindow.webContents.send('mining-anki-event', event)
+    }
+  })
 
   ipc = new IPC(this, this.torrentProcess, this.discord)
   tray = new Tray(process.platform === 'win32' ? ico : process.platform === 'darwin' ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : icon)
@@ -154,6 +189,8 @@ export default class App {
       }
     })
     this.hoshidicts.start().catch(error => log.warn('[hoshidicts] startup deferred:', error))
+    this.miningAnki.startMonitoring()
+    this.mainWindow.on('focus', () => this.miningAnki.notifyActivity())
     if (store.data.doh) this.setDOH(store.data.doh)
     nativeTheme.themeSource = 'dark'
     expose(this.ipc, ipcMain, this.mainWindow.webContents as Messageable)
@@ -501,6 +538,7 @@ export default class App {
     try {
       await this.hoshidicts.shutdown()
     } catch {}
+    this.miningAnki.stopMonitoring()
     if (!this.updater.install(forceRunAfter)) app.quit()
   }
 }
