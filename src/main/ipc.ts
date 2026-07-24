@@ -16,7 +16,17 @@ import type Discord from './discord'
 import type { MiningDictionaryKind, MiningDictionaryLookupRequest } from './hoshidicts/types.ts'
 import type { SessionMetadata, ClientSettings } from 'native'
 
-const WHITELISTED_URLS = ['https://anilist.co/', 'https://github.com/sponsors/ThaUnknown/', 'https://myanimelist.net/', 'https://miru.watch', 'https://hayase.app', 'https://hayase.watch', 'https://thewiki.moe', 'https://kitsu.app']
+const WHITELISTED_URLS = [
+  'https://anilist.co/',
+  'https://drive.usercontent.google.com/',
+  'https://github.com/sponsors/ThaUnknown/',
+  'https://myanimelist.net/',
+  'https://miru.watch',
+  'https://hayase.app',
+  'https://hayase.watch',
+  'https://thewiki.moe',
+  'https://kitsu.app'
+]
 
 let player: ReturnType<typeof spawn> | undefined
 
