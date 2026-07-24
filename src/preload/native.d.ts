@@ -5,10 +5,13 @@ import type {
   MiningDictionaryLookupResult,
   MiningDictionaryState
 } from '../main/hoshidicts/types.ts'
+import type { HayaseMigrationState } from '../main/legacy-migration.ts'
 import type { MiningLocalAudioState } from '../main/mining-audio.ts'
 
 declare module 'native' {
   interface Native {
+    hayaseMigrationState: () => Promise<HayaseMigrationState>
+    hayaseMigrationImport: () => Promise<boolean>
     miningDictionaryState: () => Promise<MiningDictionaryState>
     miningDictionaryLookup: (request: MiningDictionaryLookupRequest) => Promise<MiningDictionaryLookupResult>
     miningDictionaryImport: () => Promise<MiningDictionaryState>

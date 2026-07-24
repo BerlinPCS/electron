@@ -8,6 +8,7 @@ import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
 import { HoshidictsError } from './hoshidicts/client.ts'
+import { getHayaseMigrationState, scheduleHayaseMigration } from './legacy-migration.ts'
 import store from './store'
 
 import type App from './app'
@@ -60,6 +61,29 @@ export default class IPC {
   restart () {
     app.relaunch()
     this.app.destroy()
+  }
+
+  hayaseMigrationState () {
+    return getHayaseMigrationState({
+      currentUserData: app.getPath('userData'),
+      appData: app.getPath('appData')
+    })
+  }
+
+  async hayaseMigrationImport () {
+    const state = await this.hayaseMigrationState()
+    if (!state.available) return false
+
+    const scheduled = await scheduleHayaseMigration({
+      currentUserData: app.getPath('userData'),
+      appData: app.getPath('appData')
+    })
+    if (!scheduled) return false
+    app.relaunch()
+    setTimeout(() => {
+      this.app.destroy().catch(error => log.error('[migration] Could not restart after scheduling import:', error))
+    }, 100)
+    return true
   }
 
   enableCORS (urls: string[]) {

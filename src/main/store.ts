@@ -30,11 +30,10 @@ const DEFAULTS = {
 
 class Store {
   path: string
-  data = DEFAULTS
+  data = structuredClone(DEFAULTS)
   constructor (configName: string) {
     this.path = join(app.getPath('userData'), configName + '.json')
-
-    this.data = parseDataFile(this.path)
+    this.reload()
   }
 
   get<K extends keyof Store['data']> (key: K): Store['data'][K] {
@@ -45,6 +44,10 @@ class Store {
     this.data[key] = val
     writeFile(this.path, JSON.stringify(this.data))
   }
+
+  reload () {
+    this.data = parseDataFile(this.path)
+  }
 }
 
 function parseDataFile (filePath: string) {
@@ -52,7 +55,7 @@ function parseDataFile (filePath: string) {
     return { ...DEFAULTS, ...(JSON.parse(readFileSync(filePath).toString()) as typeof DEFAULTS) }
   } catch (error) {
     log.error('Failed to load native settings: ', error)
-    return DEFAULTS
+    return structuredClone(DEFAULTS)
   }
 }
 

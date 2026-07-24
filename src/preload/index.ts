@@ -94,6 +94,8 @@ const native: Partial<Native> = {
   },
   downloadProgress: (percent: number) => main.app.mainWindow.setProgressBar((percent === 1 || percent === 0) ? -1 : percent),
   restart: () => main.restart(),
+  hayaseMigrationState: () => main.hayaseMigrationState(),
+  hayaseMigrationImport: () => main.hayaseMigrationImport(),
   focus: () => main.focus(),
   setZoom: (scale: number) => main.setZoom(scale),
   version: () => version,
