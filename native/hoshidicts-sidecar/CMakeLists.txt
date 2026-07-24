@@ -13,7 +13,79 @@ if(NOT EXISTS "${HOSHIDICTS_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "Hoshidicts submodule is missing")
 endif()
 
+find_package(Git REQUIRED)
+set(HOSHIDICTS_UNICODE_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/0001-unicode-filesystem-paths.patch")
+get_filename_component(HAYATAN_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(HOSHIDICTS_UNICODE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/hoshidicts-unicode")
+set(HOSHIDICTS_UNICODE_FILES
+    include/hoshidicts/importer.hpp
+    include/hoshidicts/deinflector.hpp
+    include/hoshidicts/lookup.hpp
+    include/hoshidicts/query.hpp
+    src/hash/bloom.cpp
+    src/hash/bloom.hpp
+    src/hash/hash.cpp
+    src/hash/hash.hpp
+    src/importer.cpp
+    src/memory/memory.cpp
+    src/memory/memory.hpp
+    src/query.cpp
+    src/zip/zip.cpp
+    src/zip/zip.hpp
+)
+file(REMOVE_RECURSE "${HOSHIDICTS_UNICODE_DIR}")
+foreach(HOSHIDICTS_UNICODE_FILE IN LISTS HOSHIDICTS_UNICODE_FILES)
+    get_filename_component(HOSHIDICTS_UNICODE_PARENT
+        "${HOSHIDICTS_UNICODE_FILE}" DIRECTORY)
+    file(MAKE_DIRECTORY
+        "${HOSHIDICTS_UNICODE_DIR}/${HOSHIDICTS_UNICODE_PARENT}")
+    configure_file(
+        "${HOSHIDICTS_SOURCE_DIR}/${HOSHIDICTS_UNICODE_FILE}"
+        "${HOSHIDICTS_UNICODE_DIR}/${HOSHIDICTS_UNICODE_FILE}"
+        COPYONLY
+    )
+endforeach()
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "GIT_CEILING_DIRECTORIES=${HAYATAN_SOURCE_DIR}"
+            "${GIT_EXECUTABLE}" apply
+            --ignore-space-change --ignore-whitespace
+            "${HOSHIDICTS_UNICODE_PATCH}"
+    WORKING_DIRECTORY "${HOSHIDICTS_UNICODE_DIR}"
+    RESULT_VARIABLE HOSHIDICTS_PATCH_RESULT
+)
+if(NOT HOSHIDICTS_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR "Could not apply the Hoshidicts Unicode path patch")
+endif()
+
 add_subdirectory("${HOSHIDICTS_SOURCE_DIR}" hoshidicts EXCLUDE_FROM_ALL)
+
+get_target_property(HOSHIDICTS_ORIGINAL_SOURCES hoshidicts SOURCES)
+set(HOSHIDICTS_UNICODE_SOURCES)
+foreach(HOSHIDICTS_SOURCE IN LISTS HOSHIDICTS_ORIGINAL_SOURCES)
+    if(IS_ABSOLUTE "${HOSHIDICTS_SOURCE}")
+        file(RELATIVE_PATH HOSHIDICTS_RELATIVE_SOURCE
+            "${HOSHIDICTS_SOURCE_DIR}" "${HOSHIDICTS_SOURCE}")
+    else()
+        set(HOSHIDICTS_RELATIVE_SOURCE "${HOSHIDICTS_SOURCE}")
+    endif()
+    if(HOSHIDICTS_RELATIVE_SOURCE IN_LIST HOSHIDICTS_UNICODE_FILES)
+        list(APPEND HOSHIDICTS_UNICODE_SOURCES
+            "${HOSHIDICTS_UNICODE_DIR}/${HOSHIDICTS_RELATIVE_SOURCE}")
+    else()
+        list(APPEND HOSHIDICTS_UNICODE_SOURCES "${HOSHIDICTS_SOURCE}")
+    endif()
+endforeach()
+set_property(TARGET hoshidicts PROPERTY SOURCES "${HOSHIDICTS_UNICODE_SOURCES}")
+target_include_directories(hoshidicts BEFORE
+    PUBLIC "${HOSHIDICTS_UNICODE_DIR}/include"
+    PRIVATE
+        "${HOSHIDICTS_UNICODE_DIR}/src"
+        "${HOSHIDICTS_SOURCE_DIR}/src"
+)
 
 # Hoshidicts embeds its kanji mapping with the C++ #embed directive, which
 # MSVC does not currently support. Generate an equivalent comma-separated
@@ -104,6 +176,7 @@ add_executable(hoshidicts-sidecar
 )
 
 target_include_directories(hoshidicts-sidecar PRIVATE
+    "${HOSHIDICTS_UNICODE_DIR}/src"
     "${HOSHIDICTS_SOURCE_DIR}/src"
 )
 
@@ -111,6 +184,10 @@ target_link_libraries(hoshidicts-sidecar PRIVATE
     hoshidicts
     Threads::Threads
 )
+
+if(WIN32)
+    target_link_libraries(hoshidicts-sidecar PRIVATE shell32)
+endif()
 
 # The sidecar is packaged as a single executable. Avoid runtime dependencies
 # on MinGW DLLs that electron-builder does not copy beside it.

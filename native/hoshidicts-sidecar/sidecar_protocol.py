@@ -17,6 +17,7 @@ class Sidecar:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
         )
         self.events = []
 
@@ -46,7 +47,7 @@ class Sidecar:
 def make_dictionary(path):
     media = b"\x89PNG\r\n\x1a\nHayase dictionary media"
     files = {
-        "index.json": {"title": "Hayase Test Dictionary", "revision": "1", "format": 3},
+        "index.json": {"title": "日本語辞書", "revision": "1", "format": 3},
         "term_bank_1.json": [
             ["食べる", "たべる", "", "v1", 10, ["to eat"], 1, "common"],
         ],
@@ -87,8 +88,8 @@ def main():
     executable = pathlib.Path(sys.argv[1])
     with tempfile.TemporaryDirectory() as temporary:
         temporary = pathlib.Path(temporary)
-        root = temporary / "dictionaries"
-        dictionary_zip = temporary / "dictionary.zip"
+        root = temporary / "日本語プロファイル" / "dictionaries"
+        dictionary_zip = temporary / "日本語辞書.zip"
         frequency_zip = temporary / "[Freq] Test.zip"
         pitch_zip = temporary / "[Pitch] Test.zip"
         unsupported_zip = temporary / "unsupported.zip"
@@ -123,7 +124,7 @@ def main():
             "frequency": [dictionary["id"]],
             "pitch": [dictionary["id"]],
         }
-        assert "Hayase Test Dictionary" in imported["styles"]
+        assert "日本語辞書" in imported["styles"]
         phases = {event["data"]["phase"] for event in sidecar.events if event["event"] == "importProgress"}
         assert {"opening", "importing", "finalizing", "completion"} <= phases
 
@@ -133,13 +134,13 @@ def main():
             {"paths": [str(unsupported_zip), str(dictionary_zip), str(frequency_zip), str(pitch_zip)]},
         )["result"]
         by_title = {item["title"]: item for item in after_batch["dictionaries"]}
-        assert set(by_title) == {"Hayase Test Dictionary", "Test Frequency", "Test Pitch Guide"}
+        assert set(by_title) == {"日本語辞書", "Test Frequency", "Test Pitch Guide"}
         assert by_title["Test Frequency"]["counts"] == {"term": 0, "frequency": 1, "pitch": 0, "media": 0}
         assert by_title["Test Pitch Guide"]["counts"] == {"term": 0, "frequency": 0, "pitch": 1, "media": 0}
         import_errors = [event for event in sidecar.events if event["event"] == "importError"]
         assert {event["data"]["fileName"] for event in import_errors} == {
             "unsupported.zip",
-            "dictionary.zip",
+            "日本語辞書.zip",
         }
         assert not any((root / ".staging").iterdir())
 
@@ -159,14 +160,14 @@ def main():
         media = sidecar.send(
             6,
             "media",
-            {"dictionary": "Hayase Test Dictionary", "path": "media/test.png"},
+            {"dictionary": "日本語辞書", "path": "media/test.png"},
         )["result"]
         assert base64.b64decode(media["data"]) == b"\x89PNG\r\n\x1a\nHayase dictionary media"
         assert media["size"] == 31
         missing_media = sidecar.send(
             7,
             "media",
-            {"dictionary": "Hayase Test Dictionary", "path": "media/missing.png"},
+            {"dictionary": "日本語辞書", "path": "media/missing.png"},
             allow_error=True,
         )
         assert missing_media["error"]["code"] == "MEDIA_NOT_FOUND"
@@ -196,7 +197,7 @@ def main():
         # Manifest state and query data survive a complete sidecar restart.
         sidecar = Sidecar(executable, root)
         persisted = sidecar.send(14, "state")["result"]
-        assert persisted["dictionaries"][0]["title"] == "Hayase Test Dictionary"
+        assert persisted["dictionaries"][0]["title"] == "日本語辞書"
         assert sidecar.send(
             15,
             "lookup",

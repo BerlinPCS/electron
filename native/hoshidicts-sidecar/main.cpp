@@ -39,6 +39,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #include "hoshidicts/importer.hpp"
@@ -51,6 +52,17 @@ namespace {
 
 constexpr std::size_t kMaximumProtocolLine = 8 * 1024 * 1024;
 constexpr int64_t kManifestSchemaVersion = 1;
+
+fs::path path_from_utf8(std::string_view value) {
+  return fs::path(
+      std::u8string(reinterpret_cast<const char8_t *>(value.data()),
+                    value.size()));
+}
+
+std::string path_to_utf8(const fs::path &path) {
+  const auto value = path.u8string();
+  return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
 
 class Json {
 public:
@@ -601,14 +613,15 @@ std::vector<std::string> split_whitespace(std::string_view input) {
 std::string read_file(const fs::path &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
-    throw std::runtime_error("could not read " + path.string());
+    throw std::runtime_error("could not read " + path_to_utf8(path));
   }
   return std::string(std::istreambuf_iterator<char>(input),
                      std::istreambuf_iterator<char>());
 }
 
 void write_atomic(const fs::path &path, std::string_view content) {
-  const fs::path temporary = path.string() + ".tmp";
+  fs::path temporary = path;
+  temporary += ".tmp";
   {
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     output.exceptions(std::ios::badbit | std::ios::failbit);
@@ -620,13 +633,13 @@ void write_atomic(const fs::path &path, std::string_view content) {
                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     std::error_code ignored;
     fs::remove(temporary, ignored);
-    throw std::runtime_error("could not replace " + path.string());
+    throw std::runtime_error("could not replace " + path_to_utf8(path));
   }
 #else
   if (::rename(temporary.c_str(), path.c_str()) != 0) {
     std::error_code ignored;
     fs::remove(temporary, ignored);
-    throw std::runtime_error("could not replace " + path.string());
+    throw std::runtime_error("could not replace " + path_to_utf8(path));
   }
 #endif
 }
@@ -861,7 +874,7 @@ bool safe_dictionary_title(std::string_view title) {
 
 std::string preflight_dictionary_zip(const fs::path &zip_path) {
   Zip zip;
-  if (!zip.open(zip_path.string())) {
+  if (!zip.open(zip_path)) {
     throw SidecarError("IMPORT_FAILED", "failed to open dictionary ZIP");
   }
   const int index_position = zip.find("index.json");
@@ -1168,7 +1181,8 @@ private:
       std::error_code error;
       fs::remove_all(entry.path(), error);
       if (error) {
-        std::cerr << "could not clear stale staging path " << entry.path()
+        std::cerr << "could not clear stale staging path "
+                  << path_to_utf8(entry.path())
                   << ": " << error.message() << '\n';
       }
     }
@@ -1177,7 +1191,8 @@ private:
       try {
         manifest_ = parse_manifest(Json::parse(read_file(manifest_path_)));
       } catch (const std::exception &error) {
-        const fs::path invalid = manifest_path_.string() + ".invalid";
+        fs::path invalid = manifest_path_;
+        invalid += ".invalid";
         std::error_code move_error;
         fs::rename(manifest_path_, invalid, move_error);
         std::cerr << "could not load manifest: " << error.what() << '\n';
@@ -1202,7 +1217,7 @@ private:
       if (!entry.is_directory()) {
         continue;
       }
-      std::string id = entry.path().filename().string();
+      std::string id = path_to_utf8(entry.path().filename());
       if (std::ranges::find(manifest_.dictionaries, id,
                             &DictionaryRecord::id) !=
           manifest_.dictionaries.end()) {
@@ -1210,7 +1225,7 @@ private:
       }
       if (!valid_dictionary_folder(entry.path())) {
         std::cerr << "leaving invalid dictionary folder untouched: "
-                  << entry.path() << '\n';
+                  << path_to_utf8(entry.path()) << '\n';
         continue;
       }
       try {
@@ -1236,7 +1251,7 @@ private:
         }
         manifest_.dictionaries.push_back(std::move(dictionary));
       } catch (const std::exception &error) {
-        std::cerr << "could not reconcile " << entry.path() << ": "
+        std::cerr << "could not reconcile " << path_to_utf8(entry.path()) << ": "
                   << error.what() << '\n';
       }
     }
@@ -1253,7 +1268,7 @@ private:
             !enabled_for(const_cast<Enabled &>(dictionary->enabled), kind)) {
           continue;
         }
-        std::string path = (data_ / id).string();
+        fs::path path = data_ / id;
         if (kind == "term") {
           bundle->query.add_term_dict(path);
         } else if (kind == "frequency") {
@@ -1546,7 +1561,7 @@ private:
 
     try {
       for (std::size_t i = 0; i < paths.size(); ++i) {
-        fs::path zip_path = paths[i];
+        fs::path zip_path = path_from_utf8(paths[i]);
         fs::path work = operation_root / std::to_string(i);
         try {
           if (!fs::is_regular_file(zip_path)) {
@@ -1554,7 +1569,7 @@ private:
                                "dictionary ZIP does not exist");
           }
           fs::create_directories(work);
-          const std::string file_name = zip_path.filename().string();
+          const std::string file_name = path_to_utf8(zip_path.filename());
           auto progress = [this, &operation_id, &paths, i, &file_name](
                               std::string phase, uint64_t completed,
                               uint64_t total, std::string dictionary = {}) {
@@ -1576,7 +1591,7 @@ private:
           progress("opening", 1, 1, source_title);
           progress("importing", 0, 1, source_title);
           ImportResult result = dictionary_importer::import(
-              zip_path.string(), work.string(), low_ram);
+              zip_path, work, low_ram);
           if (!result.success) {
             std::string message = result.errors.empty()
                                       ? "dictionary import failed"
@@ -1591,7 +1606,7 @@ private:
                 "IMPORT_FAILED",
                 "imported dictionary title did not match index.json");
           }
-          fs::path staged = work / result.title;
+          fs::path staged = work / path_from_utf8(result.title);
           if (!valid_dictionary_folder(staged)) {
             throw SidecarError("IMPORT_FAILED",
                                "imported dictionary failed validation");
@@ -1680,7 +1695,7 @@ private:
               Json::Object{{"operationId", operation_id},
                            {"fileIndex", static_cast<uint64_t>(i)},
                            {"fileCount", static_cast<uint64_t>(paths.size())},
-                           {"fileName", zip_path.filename().string()},
+                           {"fileName", path_to_utf8(zip_path.filename())},
                            {"code", error.code()},
                            {"message", error.what()}});
         } catch (const std::exception &error) {
@@ -1691,7 +1706,7 @@ private:
               Json::Object{{"operationId", operation_id},
                            {"fileIndex", static_cast<uint64_t>(i)},
                            {"fileCount", static_cast<uint64_t>(paths.size())},
-                           {"fileName", zip_path.filename().string()},
+                           {"fileName", path_to_utf8(zip_path.filename())},
                            {"code", "IMPORT_FAILED"},
                            {"message", error.what()}});
         }
@@ -1991,26 +2006,24 @@ private:
   std::thread admin_thread_;
 };
 
-void print_usage(const char *executable) {
+void print_usage(std::string_view executable) {
   std::cerr << "Usage: " << executable << " --dictionary-root <path>\n";
 }
 
-} // namespace
-
-int main(int argc, char *argv[]) {
+int run_main(const std::vector<fs::path> &arguments) {
   try {
     fs::path dictionary_root;
-    for (int i = 1; i < argc; ++i) {
-      std::string_view argument = argv[i];
-      if (argument == "--dictionary-root" && i + 1 < argc) {
-        dictionary_root = argv[++i];
+    for (std::size_t i = 1; i < arguments.size(); ++i) {
+      const std::string argument = path_to_utf8(arguments[i]);
+      if (argument == "--dictionary-root" && i + 1 < arguments.size()) {
+        dictionary_root = arguments[++i];
       } else {
-        print_usage(argv[0]);
+        print_usage(path_to_utf8(arguments.front()));
         return 2;
       }
     }
     if (dictionary_root.empty()) {
-      print_usage(argv[0]);
+      print_usage(path_to_utf8(arguments.front()));
       return 2;
     }
     return Sidecar(std::move(dictionary_root)).run();
@@ -2018,4 +2031,31 @@ int main(int argc, char *argv[]) {
     std::cerr << "hoshidicts-sidecar fatal error: " << error.what() << '\n';
     return 1;
   }
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) {
+#ifdef _WIN32
+  int wide_argc = 0;
+  wchar_t **wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+  if (!wide_argv) {
+    std::cerr << "hoshidicts-sidecar fatal error: could not read command line\n";
+    return 1;
+  }
+  std::vector<fs::path> arguments;
+  arguments.reserve(static_cast<std::size_t>(wide_argc));
+  for (int i = 0; i < wide_argc; ++i) {
+    arguments.emplace_back(wide_argv[i]);
+  }
+  LocalFree(wide_argv);
+  return run_main(arguments);
+#else
+  std::vector<fs::path> arguments;
+  arguments.reserve(static_cast<std::size_t>(argc));
+  for (int i = 0; i < argc; ++i) {
+    arguments.emplace_back(argv[i]);
+  }
+  return run_main(arguments);
+#endif
 }

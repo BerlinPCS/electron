@@ -1,0 +1,449 @@
+diff --git a/include/hoshidicts/importer.hpp b/include/hoshidicts/importer.hpp
+index d5651b1..2e377ad 100644
+--- a/include/hoshidicts/importer.hpp
++++ b/include/hoshidicts/importer.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <filesystem>
+ #include <map>
+ #include <optional>
+ #include <string>
+@@ -51,5 +52,6 @@ struct ImportResult {
+ };
+ 
+ namespace dictionary_importer {
+-ImportResult import(const std::string& zip_path, const std::string& output_dir, bool low_ram = false);
++ImportResult import(const std::filesystem::path& zip_path, const std::filesystem::path& output_dir,
++                    bool low_ram = false);
+ };
+diff --git a/include/hoshidicts/query.hpp b/include/hoshidicts/query.hpp
+index 590ee59..2fcffcb 100644
+--- a/include/hoshidicts/query.hpp
++++ b/include/hoshidicts/query.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <filesystem>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
+@@ -67,9 +68,9 @@ class DictionaryQuery {
+   DictionaryQuery(DictionaryQuery&&) noexcept;
+   DictionaryQuery& operator=(DictionaryQuery&&) noexcept;
+ 
+-  void add_term_dict(const std::string& path);
+-  void add_freq_dict(const std::string& path);
+-  void add_pitch_dict(const std::string& path);
++  void add_term_dict(const std::filesystem::path& path);
++  void add_freq_dict(const std::filesystem::path& path);
++  void add_pitch_dict(const std::filesystem::path& path);
+ 
+   void query_freq(std::vector<TermResult>& terms) const;
+   void query_pitch(std::vector<TermResult>& terms) const;
+@@ -104,7 +105,7 @@ class DictionaryQuery {
+   };
+   enum DictionaryType : uint8_t { TERM, FREQ, PITCH };
+ 
+-  void add_dict(const std::string& path, DictionaryType);
++  void add_dict(const std::filesystem::path& path, DictionaryType);
+ 
+   static std::string decompress_glossary(const void* data, size_t size);
+   std::vector<Dictionary> term_dicts_;
+diff --git a/src/hash/bloom.cpp b/src/hash/bloom.cpp
+index f33d5b8..6b89872 100644
+--- a/src/hash/bloom.cpp
++++ b/src/hash/bloom.cpp
+@@ -24,7 +24,7 @@ bool bloom::load(const uint8_t* ptr, size_t size) {
+   return true;
+ }
+ 
+-void bloom::build_to_file(const std::vector<uint64_t>& hashes, const std::string& path) {
++void bloom::build_to_file(const std::vector<uint64_t>& hashes, const std::filesystem::path& path) {
+   uint64_t num_bits = std::bit_ceil(std::max<uint64_t>(hashes.size() * 10, 64));
+   uint64_t mask = num_bits - 1;
+ 
+diff --git a/src/hash/bloom.hpp b/src/hash/bloom.hpp
+index e05466b..83f0571 100644
+--- a/src/hash/bloom.hpp
++++ b/src/hash/bloom.hpp
+@@ -1,12 +1,13 @@
+ #pragma once
+ #include <cstdint>
++#include <filesystem>
+ #include <string>
+ #include <vector>
+ 
+ namespace hash {
+ class bloom {
+  public:
+-  static void build_to_file(const std::vector<uint64_t>& hashes, const std::string& path);
++  static void build_to_file(const std::vector<uint64_t>& hashes, const std::filesystem::path& path);
+   bool load(const uint8_t* ptr, size_t size);
+ 
+   bool contains(uint64_t h) const {
+diff --git a/src/hash/hash.cpp b/src/hash/hash.cpp
+index 1e9120b..e960f7f 100644
+--- a/src/hash/hash.cpp
++++ b/src/hash/hash.cpp
+@@ -32,7 +32,8 @@ uint64_t linear::operator()(std::string_view key) const {
+   }
+ }
+ 
+-void linear::build_to_file(const std::vector<std::pair<uint64_t, uint64_t>>& hash_entries, const std::string& path) {
++void linear::build_to_file(const std::vector<std::pair<uint64_t, uint64_t>>& hash_entries,
++                           const std::filesystem::path& path) {
+   ptr_->capacity = std::max<uint64_t>(hash_entries.size() * 10 / 7, 16);
+   size_t file_size = sizeof(uint32_t) + ptr_->capacity * sizeof(slot);
+ 
+diff --git a/src/hash/hash.hpp b/src/hash/hash.hpp
+index 98b1f54..25282b8 100644
+--- a/src/hash/hash.hpp
++++ b/src/hash/hash.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include <cstdint>
++#include <filesystem>
+ #include <memory>
+ #include <string>
+ #include <vector>
+@@ -13,7 +14,8 @@ class linear {
+   ~linear();
+   uint64_t operator()(std::string_view key) const;
+ 
+-  void build_to_file(const std::vector<std::pair<uint64_t, uint64_t>>& hash_entries, const std::string& path);
++  void build_to_file(const std::vector<std::pair<uint64_t, uint64_t>>& hash_entries,
++                     const std::filesystem::path& path);
+   bool load(uint8_t* ptr, size_t size);
+   void set_bloom(const bloom* b) { bloom_ = b; }
+ 
+diff --git a/src/importer.cpp b/src/importer.cpp
+index 450a50d..b73808a 100644
+--- a/src/importer.cpp
++++ b/src/importer.cpp
+@@ -27,6 +27,11 @@
+ #include "zip/zip.hpp"
+ 
+ namespace {
++std::filesystem::path path_from_utf8(const std::string& value) {
++  return std::filesystem::path(
++      std::u8string(reinterpret_cast<const char8_t*>(value.data()), value.size()));
++}
++
+ struct Files {
+   std::vector<int> term_banks;
+   std::vector<int> meta_banks;
+@@ -487,13 +492,13 @@ std::vector<char> build_offset_index(std::vector<std::pair<uint64_t, uint64_t>>&
+   return offset_buf;
+ }
+ 
+-size_t write_media(const std::string& path, const Zip& zip, const std::vector<int>& files) {
++size_t write_media(const std::filesystem::path& path, const Zip& zip, const std::vector<int>& files) {
+   if (files.empty()) {
+     return 0;
+   }
+ 
+-  std::ofstream media(path + "/media.bin", std::ios::binary);
+-  std::ofstream media_idx(path + "/media.idx", std::ios::binary);
++  std::ofstream media(path / "media.bin", std::ios::binary);
++  std::ofstream media_idx(path / "media.idx", std::ios::binary);
+   setup_stream_exceptions(media);
+   setup_stream_exceptions(media_idx);
+ 
+@@ -532,7 +537,8 @@ size_t write_media(const std::string& path, const Zip& zip, const std::vector<in
+ }
+ }
+ 
+-ImportResult dictionary_importer::import(const std::string& zip_path, const std::string& output_dir, bool low_ram) {
++ImportResult dictionary_importer::import(const std::filesystem::path& zip_path,
++                                         const std::filesystem::path& output_dir, bool low_ram) {
+   ImportResult result;
+   try {
+     Zip zip;
+@@ -556,8 +562,7 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
+ 
+     result.title = index.title;
+ 
+-    std::filesystem::path dict_path = std::filesystem::path(output_dir) / result.title;
+-    std::string path = dict_path.string();
++    std::filesystem::path dict_path = output_dir / path_from_utf8(result.title);
+     std::filesystem::create_directories(dict_path);
+ 
+     std::string styles;
+@@ -569,9 +574,10 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
+     result.summary = create_summary(index, styles);
+     const Files files = get_files(zip);
+     std::future<size_t> media_thread =
+-        std::async(std::launch::async, [&path, &zip, &files]() { return write_media(path, zip, files.media_files); });
++        std::async(std::launch::async,
++                   [&dict_path, &zip, &files]() { return write_media(dict_path, zip, files.media_files); });
+ 
+-    std::ofstream blobs(path + "/blobs.bin", std::ios::binary);
++    std::ofstream blobs(dict_path / "blobs.bin", std::ios::binary);
+     setup_stream_exceptions(blobs);
+     std::vector<std::pair<uint64_t, uint64_t>> offsets;
+     uint64_t write_offset = 0;
+@@ -586,11 +592,11 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
+     auto offset_buf = build_offset_index(offsets, write_offset, hash_entries);
+     std::vector<std::pair<uint64_t, uint64_t>>().swap(offsets);
+ 
+-    auto hash_thread = std::async(std::launch::async, [&hash_entries, &path]() {
++    auto hash_thread = std::async(std::launch::async, [&hash_entries, &dict_path]() {
+       hash::linear table;
+-      table.build_to_file(hash_entries, path + "/hash.table");
++      table.build_to_file(hash_entries, dict_path / "hash.table");
+       auto hashes = hash_entries | std::views::keys | std::ranges::to<std::vector>();
+-      hash::bloom::build_to_file(hashes, path + "/bloom.filter");
++      hash::bloom::build_to_file(hashes, dict_path / "bloom.filter");
+     });
+ 
+     blobs.write(offset_buf.data(), static_cast<std::streamsize>(offset_buf.size()));
+@@ -598,11 +604,15 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
+ 
+     result.summary.counts.media.total = media_thread.get();
+ 
+-    if (glz::write_file_json(result.summary, path + "/index.json", std::string{})) {
++    std::string summary_json;
++    if (glz::write_json(result.summary, summary_json)) {
+       throw std::runtime_error("failed to write index.json");
+     }
++    std::ofstream index_file(dict_path / "index.json", std::ios::binary);
++    setup_stream_exceptions(index_file);
++    index_file.write(summary_json.data(), static_cast<std::streamsize>(summary_json.size()));
+ 
+-    std::ofstream sui(path + "/.hoshidicts_3", std::ios::binary);
++    std::ofstream sui(dict_path / ".hoshidicts_3", std::ios::binary);
+     result.success = true;
+   } catch (const std::exception& e) {
+     result.success = false;
+@@ -613,7 +623,7 @@ ImportResult dictionary_importer::import(const std::string& zip_path, const std:
+   }
+ 
+   if (!result.success && !result.title.empty()) {
+-    std::filesystem::remove_all(std::filesystem::path(output_dir) / result.title);
++    std::filesystem::remove_all(output_dir / path_from_utf8(result.title));
+   }
+ 
+   return result;
+diff --git a/src/memory/memory.cpp b/src/memory/memory.cpp
+index 4ce29fb..554b101 100644
+--- a/src/memory/memory.cpp
++++ b/src/memory/memory.cpp
+@@ -10,10 +10,10 @@
+ #endif
+ 
+ namespace memory {
+-mapped_file map_rd(const std::string& path) {
++mapped_file map_rd(const std::filesystem::path& path) {
+ #ifdef _WIN32
+   HANDLE file =
+-      CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
++      CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+   if (file == INVALID_HANDLE_VALUE) {
+     return {};
+   }
+@@ -24,7 +24,7 @@ mapped_file map_rd(const std::string& path) {
+     return {};
+   }
+ 
+-  HANDLE mapping = CreateFileMappingA(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
++  HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+   CloseHandle(file);
+   if (!mapping) {
+     return {};
+@@ -59,13 +59,13 @@ mapped_file map_rd(const std::string& path) {
+ #endif
+ }
+ 
+-mapped_file map_rw(const std::string& path, size_t file_size) {
++mapped_file map_rw(const std::filesystem::path& path, size_t file_size) {
+   if (file_size == 0) {
+     return {};
+   }
+ 
+ #ifdef _WIN32
+-  HANDLE file = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
++  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                             nullptr);
+   if (file == INVALID_HANDLE_VALUE) {
+     return {};
+@@ -78,7 +78,7 @@ mapped_file map_rw(const std::string& path, size_t file_size) {
+     return {};
+   }
+ 
+-  HANDLE mapping = CreateFileMappingA(file, nullptr, PAGE_READWRITE, size.HighPart, size.LowPart, nullptr);
++  HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READWRITE, size.HighPart, size.LowPart, nullptr);
+   CloseHandle(file);
+   if (!mapping) {
+     return {};
+diff --git a/src/memory/memory.hpp b/src/memory/memory.hpp
+index 374b9a2..86e428a 100644
+--- a/src/memory/memory.hpp
++++ b/src/memory/memory.hpp
+@@ -2,7 +2,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
+-#include <string>
++#include <filesystem>
+ 
+ namespace memory {
+ struct mapped_file {
+@@ -12,7 +12,7 @@ struct mapped_file {
+   explicit operator bool() const { return data != nullptr; }
+ };
+ 
+-mapped_file map_rd(const std::string& path);
+-mapped_file map_rw(const std::string& path, size_t file_size);
++mapped_file map_rd(const std::filesystem::path& path);
++mapped_file map_rw(const std::filesystem::path& path, size_t file_size);
+ void unmap(mapped_file mapping);
+ }
+diff --git a/src/query.cpp b/src/query.cpp
+index aeb5173..0f7aa47 100644
+--- a/src/query.cpp
++++ b/src/query.cpp
+@@ -20,6 +20,11 @@
+ #include "memory/memory.hpp"
+ 
+ namespace {
++std::string path_to_utf8(const std::filesystem::path& path) {
++  const auto value = path.u8string();
++  return {reinterpret_cast<const char*>(value.data()), value.size()};
++}
++
+ template <typename T>
+ T read_val(const uint8_t*& addr) {
+   T val;
+@@ -66,13 +71,13 @@ DictionaryQuery::Dictionary::~Dictionary() = default;
+ DictionaryQuery::Dictionary::Dictionary(Dictionary&&) noexcept = default;
+ DictionaryQuery::Dictionary& DictionaryQuery::Dictionary::operator=(Dictionary&&) noexcept = default;
+ 
+-void DictionaryQuery::add_dict(const std::string& path, DictionaryType type) {
++void DictionaryQuery::add_dict(const std::filesystem::path& path, DictionaryType type) {
+   int version = 0;
+-  if (std::filesystem::is_regular_file(path + "/.hoshidicts_3")) {
++  if (std::filesystem::is_regular_file(path / ".hoshidicts_3")) {
+     version = 3;
+-  } else if (std::filesystem::is_regular_file(path + "/.hoshidicts_2")) {
++  } else if (std::filesystem::is_regular_file(path / ".hoshidicts_2")) {
+     version = 2;
+-  } else if (std::filesystem::is_regular_file(path + "/.hoshidicts_1")) {
++  } else if (std::filesystem::is_regular_file(path / ".hoshidicts_1")) {
+     version = 1;
+   } else {
+     return;
+@@ -81,21 +86,28 @@ void DictionaryQuery::add_dict(const std::string& path, DictionaryType type) {
+   Dictionary dict;
+   Summary summary;
+   std::string buf{};
+-  if (glz::read_file_json<glz::opts{.error_on_unknown_keys = false}>(summary, path + "/index.json", buf)) {
++  {
++    std::ifstream input(path / "index.json", std::ios::binary);
++    if (!input) {
++      return;
++    }
++    buf.assign(std::istreambuf_iterator<char>(input), {});
++  }
++  if (glz::read<glz::opts{.error_on_unknown_keys = false}>(summary, buf)) {
+     return;
+   }
+ 
+-  dict.name = summary.title.empty() ? std::filesystem::path(path).stem().string() : summary.title;
++  dict.name = summary.title.empty() ? path_to_utf8(path.stem()) : summary.title;
+   dict.styles = summary.styles;
+-  if (dict.styles.empty() && std::filesystem::exists(path + "/styles.css")) {
+-    std::ifstream f(path + "/styles.css");
++  if (dict.styles.empty() && std::filesystem::exists(path / "styles.css")) {
++    std::ifstream f(path / "styles.css");
+     dict.styles = std::string(std::istreambuf_iterator<char>(f), {});
+   }
+ 
+   dict.data = std::make_unique<DictionaryData>();
+   dict.data->version = version;
+ 
+-  dict.data->hash_table = memory::map_rd(path + "/hash.table");
++  dict.data->hash_table = memory::map_rd(path / "hash.table");
+   if (!dict.data->hash_table) {
+     return;
+   }
+@@ -103,7 +115,7 @@ void DictionaryQuery::add_dict(const std::string& path, DictionaryType type) {
+     return;
+   }
+ 
+-  dict.data->bloom_filter = memory::map_rd(path + "/bloom.filter");
++  dict.data->bloom_filter = memory::map_rd(path / "bloom.filter");
+   if (!dict.data->bloom_filter) {
+     return;
+   }
+@@ -112,14 +124,14 @@ void DictionaryQuery::add_dict(const std::string& path, DictionaryType type) {
+   }
+   dict.data->table.set_bloom(&dict.data->bloom);
+ 
+-  dict.data->blobs = memory::map_rd(path + "/blobs.bin");
++  dict.data->blobs = memory::map_rd(path / "blobs.bin");
+   if (!dict.data->blobs) {
+     return;
+   }
+ 
+-  dict.data->media = memory::map_rd(path + "/media.bin");
++  dict.data->media = memory::map_rd(path / "media.bin");
+   if (dict.data->media) {
+-    dict.data->media_index = memory::map_rd(path + "/media.idx");
++    dict.data->media_index = memory::map_rd(path / "media.idx");
+   }
+ 
+   switch (type) {
+@@ -135,11 +147,15 @@ void DictionaryQuery::add_dict(const std::string& path, DictionaryType type) {
+   }
+ }
+ 
+-void DictionaryQuery::add_term_dict(const std::string& path) { add_dict(path, DictionaryQuery::DictionaryType::TERM); }
++void DictionaryQuery::add_term_dict(const std::filesystem::path& path) {
++  add_dict(path, DictionaryQuery::DictionaryType::TERM);
++}
+ 
+-void DictionaryQuery::add_freq_dict(const std::string& path) { add_dict(path, DictionaryQuery::DictionaryType::FREQ); }
++void DictionaryQuery::add_freq_dict(const std::filesystem::path& path) {
++  add_dict(path, DictionaryQuery::DictionaryType::FREQ);
++}
+ 
+-void DictionaryQuery::add_pitch_dict(const std::string& path) {
++void DictionaryQuery::add_pitch_dict(const std::filesystem::path& path) {
+   add_dict(path, DictionaryQuery::DictionaryType::PITCH);
+ }
+ 
+diff --git a/src/zip/zip.cpp b/src/zip/zip.cpp
+index 2551787..f583a6e 100644
+--- a/src/zip/zip.cpp
++++ b/src/zip/zip.cpp
+@@ -20,7 +20,7 @@ Zip::~Zip() {
+   memory::unmap(file);
+ }
+ 
+-bool Zip::open(const std::string& path) {
++bool Zip::open(const std::filesystem::path& path) {
+   file = memory::map_rd(path);
+   if (!file) {
+     return false;
+diff --git a/src/zip/zip.hpp b/src/zip/zip.hpp
+index 1e53ebe..766ba05 100644
+--- a/src/zip/zip.hpp
++++ b/src/zip/zip.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <filesystem>
+ #include <optional>
+ #include <string>
+ #include <vector>
+@@ -20,7 +21,7 @@ struct Zip {
+   std::vector<ZipEntry> entries;
+ 
+   ~Zip();
+-  bool open(const std::string& path);
++  bool open(const std::filesystem::path& path);
+   int find(const std::string& name) const;
+   std::string read(int index) const;
+ 
