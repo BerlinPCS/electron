@@ -105,7 +105,7 @@ export const DEFAULT_MINING_ANKI_SETTINGS: MiningAnkiSettings = {
   endpoint: 'http://127.0.0.1:8765',
   apiKey: '',
   fieldMappings: {},
-  tags: '',
+  tags: 'HayatanMining',
   allowDuplicates: false,
   duplicateScope: 'collection',
   checkAllModels: false,
@@ -116,6 +116,11 @@ export const DEFAULT_MINING_ANKI_SETTINGS: MiningAnkiSettings = {
 interface AnkiConnectResponse<T> {
   result: T
   error: string | null
+}
+
+interface AnkiConnectAction {
+  action: string
+  params?: Record<string, unknown>
 }
 
 interface AnkiConnectNote {
@@ -204,17 +209,36 @@ export class AnkiConnectClient {
     if (typeof version !== 'number') throw new Error('AnkiConnect returned an invalid version.')
   }
 
+  async multi (actions: AnkiConnectAction[]): Promise<unknown[]> {
+    if (!actions.length) return []
+    for (const { action } of actions) {
+      if (!/^[A-Za-z][A-Za-z0-9]*$/.test(action) || action === 'multi') {
+        throw new Error('Invalid AnkiConnect action.')
+      }
+    }
+
+    const responses = await this.request<unknown>('multi', { actions })
+    if (!Array.isArray(responses) || responses.length !== actions.length) {
+      throw new Error('AnkiConnect returned an invalid multi response.')
+    }
+    return responses
+  }
+
   async detect (): Promise<{ decks: string[], models: MiningAnkiModel[] }> {
-    const [decksValue, modelNamesValue] = await Promise.all([
-      this.request<unknown>('deckNames'),
-      this.request<unknown>('modelNames')
+    const [decksValue, modelNamesValue] = await this.multi([
+      { action: 'deckNames' },
+      { action: 'modelNames' }
     ])
     const decks = validateStringArray(decksValue, 'deck names').sort(compareNames)
     const modelNames = validateStringArray(modelNamesValue, 'model names')
-    const models = await Promise.all(modelNames.map(async name => ({
-      name,
-      fields: validateStringArray(await this.request<unknown>('modelFieldNames', { modelName: name }), `fields for ${name}`)
+    const fieldValues = await this.multi(modelNames.map(modelName => ({
+      action: 'modelFieldNames',
+      params: { modelName }
     })))
+    const models = modelNames.map((name, index) => ({
+      name,
+      fields: validateStringArray(fieldValues[index], `fields for ${name}`)
+    }))
     return { decks, models: models.sort((a, b) => compareNames(a.name, b.name)) }
   }
 
@@ -265,6 +289,18 @@ export class MiningAnkiService {
   private lastReachableAt = 0
   private probePromise?: Promise<MiningAnkiConnectionResult>
   private detectPromise?: Promise<{ decks: string[], models: MiningAnkiModel[] }>
+  private fetchTail = Promise.resolve()
+  private readonly queuedFetch: Fetch = async (input, init) => {
+    const previous = this.fetchTail
+    let release!: () => void
+    this.fetchTail = new Promise<void>(resolve => { release = resolve })
+    await previous
+    try {
+      return await this.fetchImplementation(input, init)
+    } finally {
+      release()
+    }
+  }
 
   constructor (
     private readonly storage: MiningAnkiStorage,
@@ -487,7 +523,7 @@ export class MiningAnkiService {
 
   private client () {
     const settings = sanitizeSettings(this.storage.read())
-    return new AnkiConnectClient(settings.endpoint, settings.apiKey, this.fetchImplementation)
+    return new AnkiConnectClient(settings.endpoint, settings.apiKey, this.queuedFetch)
   }
 
   private requireConfigured () {
@@ -984,8 +1020,7 @@ const LAPIS_DEFAULT_MAPPINGS: Record<string, string> = {
   PitchCategories: '{pitch-accent-categories}',
   Frequency: '{frequencies}',
   FreqSort: '{frequency-harmonic-rank}',
-  MiscInfo: '{document-title}',
-  IsWordAndSentenceCard: 'x'
+  MiscInfo: '{document-title}'
 }
 
 const HOSHI_DEFAULT_MAPPINGS: Record<string, Record<string, string>> = {
@@ -995,7 +1030,6 @@ const HOSHI_DEFAULT_MAPPINGS: Record<string, Record<string, string>> = {
     word: '{expression}',
     reading: '{reading}',
     sentence: '{sentence}',
-    sentenceCard: 'x',
     selectionText: '{popup-selection-text}',
     definition: '{glossary-first}',
     wordAudio: '{audio}',

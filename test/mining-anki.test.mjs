@@ -19,6 +19,11 @@ function jsonResponse (result, error = null, status = 200) {
   })
 }
 
+function jsonMultiResponse (request, resolve) {
+  assert.equal(request.action, 'multi')
+  return jsonResponse(request.params.actions.map(resolve))
+}
+
 test('only accepts loopback AnkiConnect endpoints', () => {
   assert.equal(validateAnkiEndpoint('http://127.0.0.1:8765'), 'http://127.0.0.1:8765/')
   assert.equal(validateAnkiEndpoint('http://localhost:8765'), 'http://localhost:8765/')
@@ -60,10 +65,15 @@ test('detect discovers and sorts decks/models and their fields', async () => {
   const client = new AnkiConnectClient('http://127.0.0.1:8765', '', async (_url, init) => {
     const request = JSON.parse(init.body)
     actions.push(request)
-    if (request.action === 'deckNames') return jsonResponse(['Mining', 'Default'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic', 'Lapis'])
-    if (request.action === 'modelFieldNames') {
-      return jsonResponse(request.params.modelName === 'Lapis' ? ['Expression', 'Sentence'] : ['Front', 'Back'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining', 'Default']
+        if (action.action === 'modelNames') return ['Basic', 'Lapis']
+        if (action.action === 'modelFieldNames') {
+          return action.params.modelName === 'Lapis' ? ['Expression', 'Sentence'] : ['Front', 'Back']
+        }
+        throw new Error('unexpected action')
+      })
     }
     throw new Error('unexpected action')
   })
@@ -74,7 +84,11 @@ test('detect discovers and sorts decks/models and their fields', async () => {
       { name: 'Lapis', fields: ['Expression', 'Sentence'] }
     ]
   })
-  assert.equal(actions.filter(request => request.action === 'modelFieldNames').length, 2)
+  assert.deepEqual(actions.map(request => request.action), ['multi', 'multi'])
+  assert.deepEqual(actions[1].params.actions, [
+    { action: 'modelFieldNames', params: { modelName: 'Basic' } },
+    { action: 'modelFieldNames', params: { modelName: 'Lapis' } }
+  ])
 })
 
 test('service auto-selects non-default deck and known Hoshi model with defaults', async () => {
@@ -84,10 +98,17 @@ test('service auto-selects non-default deck and known Hoshi model with defaults'
     write: value => { settings = value }
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
-    if (request.action === 'deckNames') return jsonResponse(['Default', 'Japanese'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic', 'Lapis'])
-    if (request.action === 'modelFieldNames') {
-      return jsonResponse(request.params.modelName === 'Lapis' ? ['Expression', 'Sentence'] : ['Front'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Default', 'Japanese']
+        if (action.action === 'modelNames') return ['Basic', 'Lapis']
+        if (action.action === 'modelFieldNames') {
+          return action.params.modelName === 'Lapis'
+            ? ['Expression', 'Sentence', 'IsWordAndSentenceCard']
+            : ['Front']
+        }
+        throw new Error('unexpected action')
+      })
     }
     throw new Error('unexpected action')
   })
@@ -112,9 +133,14 @@ test('startup reachability probe restores decks, models, and fields for saved se
     const request = JSON.parse(init.body)
     actions.push(request.action)
     if (request.action === 'version') return jsonResponse(6)
-    if (request.action === 'deckNames') return jsonResponse(['Japanese'])
-    if (request.action === 'modelNames') return jsonResponse(['Kiku'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Expression', 'Sentence'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Japanese']
+        if (action.action === 'modelNames') return ['Kiku']
+        if (action.action === 'modelFieldNames') return ['Expression', 'Sentence']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
     throw new Error(`unexpected action: ${request.action}`)
   })
 
@@ -123,7 +149,7 @@ test('startup reachability probe restores decks, models, and fields for saved se
   assert.equal(state.connectionStatus, 'connected')
   assert.deepEqual(state.decks, ['Japanese'])
   assert.deepEqual(state.models, [{ name: 'Kiku', fields: ['Expression', 'Sentence'] }])
-  assert.deepEqual(actions, ['version', 'deckNames', 'modelNames', 'modelFieldNames'])
+  assert.deepEqual(actions, ['version', 'multi', 'multi'])
 })
 
 test('duplicate probe uses first field and deck-root/check-all-model options', async () => {
@@ -142,9 +168,14 @@ test('duplicate probe uses first field and deck-root/check-all-model options', a
     write: value => { settings = value }
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
-    if (request.action === 'deckNames') return jsonResponse(['Japanese::Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'Back'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Japanese::Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front', 'Back']
+        throw new Error('unexpected action')
+      })
+    }
     if (request.action === 'canAddNotesWithErrorDetail') {
       checkedNote = request.params.notes[0]
       return jsonResponse([{ canAdd: false, error: 'duplicate' }])
@@ -159,6 +190,43 @@ test('duplicate probe uses first field and deck-root/check-all-model options', a
     duplicateScope: 'deck',
     duplicateScopeOptions: { deckName: 'Japanese', checkChildren: true, checkAllModels: true }
   })
+})
+
+test('serializes simultaneous duplicate checks for the AnkiConnect listener', async () => {
+  let settings = structuredClone(DEFAULT_MINING_ANKI_SETTINGS)
+  let activeRequests = 0
+  let maxActiveRequests = 0
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: value => { settings = value }
+  }, async (_url, init) => {
+    activeRequests++
+    maxActiveRequests = Math.max(maxActiveRequests, activeRequests)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    try {
+      const request = JSON.parse(init.body)
+      if (request.action === 'multi') {
+        return jsonMultiResponse(request, action => {
+          if (action.action === 'deckNames') return ['Mining']
+          if (action.action === 'modelNames') return ['Basic']
+          if (action.action === 'modelFieldNames') return ['Front']
+          throw new Error(`unexpected action: ${action.action}`)
+        })
+      }
+      if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
+      throw new Error(`unexpected action: ${request.action}`)
+    } finally {
+      activeRequests--
+    }
+  })
+
+  await service.detect()
+  const results = await Promise.all(Array.from(
+    { length: 8 },
+    (_, index) => service.checkDuplicate({ expression: `word-${index}` })
+  ))
+  assert.equal(results.every(result => result.status === 'success' && !result.duplicate), true)
+  assert.equal(maxActiveRequests, 1)
 })
 
 test('add stores host-loaded media, adds note, and force syncs', async () => {
@@ -181,9 +249,14 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
     requests.push(request)
-    if (request.action === 'deckNames') return jsonResponse(['Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'WordAudio', 'SentenceAudio', 'Back'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front', 'WordAudio', 'SentenceAudio', 'Back']
+        throw new Error('unexpected action')
+      })
+    }
     if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
     if (request.action === 'storeMediaFile') return jsonResponse(request.params.filename)
     if (request.action === 'addNote') return jsonResponse(42)
@@ -264,9 +337,14 @@ test('native capture probes word audio, encodes generated media, and preserves o
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
     requests.push(request)
-    if (request.action === 'deckNames') return jsonResponse(['Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'WordAudio', 'SentenceAudio', 'Picture'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front', 'WordAudio', 'SentenceAudio', 'Picture']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
     if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
     if (request.action === 'storeMediaFile') return jsonResponse(request.params.filename)
     if (request.action === 'addNote') return jsonResponse(7)
@@ -325,9 +403,14 @@ test('duplicate rejection happens before native media encoding', async () => {
     write: () => {}
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
-    if (request.action === 'deckNames') return jsonResponse(['Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'Picture'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front', 'Picture']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
     if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: false, error: 'duplicate' }])
     throw new Error(`unexpected action: ${request.action}`)
   }, {}, undefined, {
@@ -405,9 +488,14 @@ test('show notes opens the Anki browser for the selected note type and expressio
     write: value => { settings = value }
   }, async (_url, init) => {
     const request = JSON.parse(init.body)
-    if (request.action === 'deckNames') return jsonResponse(['Japanese::Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic "JP"'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front Side', 'Back'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Japanese::Mining']
+        if (action.action === 'modelNames') return ['Basic "JP"']
+        if (action.action === 'modelFieldNames') return ['Front Side', 'Back']
+        throw new Error('unexpected action')
+      })
+    }
     if (request.action === 'guiBrowse') {
       browseQuery = request.params.query
       return jsonResponse([11, 12])
@@ -449,6 +537,8 @@ test('duplicate and malformed responses remain explicit', async () => {
   assert.throws(() => parseCanAdd([{ allowed: true }]), /invalid duplicate-check/)
   const client = new AnkiConnectClient('http://127.0.0.1:8765', '', async () => jsonResponse(null, 'boom'))
   await assert.rejects(client.ping(), /boom/)
+  const malformedMulti = new AnkiConnectClient('http://127.0.0.1:8765', '', async () => jsonResponse([]))
+  await assert.rejects(malformedMulti.multi([{ action: 'version' }]), /invalid multi response/)
 })
 
 test('keeps sentence audio separate from optional word audio', () => {
@@ -479,9 +569,14 @@ test('shares offline reachability state and recovers on a later probe', async ()
     if (!online) throw new TypeError('fetch failed')
     const request = JSON.parse(init.body)
     if (request.action === 'version') return jsonResponse(6)
-    if (request.action === 'deckNames') return jsonResponse(['Mining'])
-    if (request.action === 'modelNames') return jsonResponse(['Basic'])
-    if (request.action === 'modelFieldNames') return jsonResponse(['Front'])
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
     if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
     throw new Error(`unexpected action: ${request.action}`)
   }, {}, event => events.push(event))
