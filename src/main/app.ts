@@ -310,6 +310,7 @@ export default class App {
       }
 
       if (details.url.startsWith('https://anilist.co/graphql') && this.unsafeUseInternalALAPI) setCors(details.responseHeaders)
+      if (details.url.startsWith('https://hayase.ani.zip/')) setCors(details.responseHeaders)
 
       // MAL doesn't implement CORS....
       // enable CORS for any extensions that want it, but only for specific urls

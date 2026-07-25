@@ -3,10 +3,11 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import { basename, dirname, extname } from 'node:path'
 
-import { app, dialog, shell, type UtilityProcess, ipcMain, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, shell, type UtilityProcess, ipcMain, systemPreferences } from 'electron'
 import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
+import { parseAniListAuthResponse } from './auth.ts'
 import { HoshidictsError } from './hoshidicts/client.ts'
 import { getHayaseMigrationState, scheduleHayaseMigration } from './legacy-migration.ts'
 import store from './store'
@@ -20,7 +21,7 @@ import type {
   MiningAnkiSettingsPatch,
   MiningAnkiShowNotesRequest
 } from './mining-anki.ts'
-import type { SessionMetadata, ClientSettings } from 'native'
+import type { AuthResponse, SessionMetadata, ClientSettings } from 'native'
 
 const WHITELISTED_URLS = [
   'https://anilist.co/',
@@ -33,6 +34,7 @@ const WHITELISTED_URLS = [
   'https://thewiki.moe',
   'https://kitsu.app'
 ]
+const ANILIST_AUTH_URL = 'https://anilist.co/api/v2/oauth/authorize'
 
 let player: ReturnType<typeof spawn> | undefined
 
@@ -77,6 +79,67 @@ export default class IPC {
   restart () {
     app.relaunch()
     this.app.destroy()
+  }
+
+  getSetupVersion (legacyVersion = 0) {
+    const storedVersion = store.get('setupVersion')
+    if (isSetupVersion(storedVersion)) return storedVersion
+    if (!isSetupVersion(legacyVersion)) return 0
+    store.set('setupVersion', legacyVersion)
+    return legacyVersion
+  }
+
+  completeSetup (version: number) {
+    if (!isSetupVersion(version)) throw new Error('Invalid setup version')
+    store.set('setupVersion', version)
+  }
+
+  async authAL (url: string): Promise<AuthResponse> {
+    const authUrl = new URL(url)
+    if (authUrl.origin + authUrl.pathname !== ANILIST_AUTH_URL ||
+        authUrl.searchParams.get('response_type') !== 'token') {
+      throw new Error('Invalid AniList authentication URL')
+    }
+
+    const popup = new BrowserWindow({
+      parent: this.app.mainWindow,
+      width: 382,
+      height: 582,
+      resizable: false,
+      fullscreenable: false,
+      title: 'AniList',
+      titleBarOverlay: { color: '#0b1622' },
+      titleBarStyle: 'hidden',
+      backgroundColor: '#0b1622',
+      autoHideMenuBar: true,
+      webPreferences: {
+        sandbox: true,
+        webSecurity: true
+      }
+    })
+    popup.setMenuBarVisibility(false)
+    popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    popup.webContents.setUserAgent(this.app.mainWindow.webContents.getUserAgent())
+
+    return await new Promise<AuthResponse>((resolve, reject) => {
+      let settled = false
+      const finish = (result: AuthResponse | Error) => {
+        if (settled) return
+        settled = true
+        if (!popup.isDestroyed()) popup.destroy()
+        result instanceof Error ? reject(result) : resolve(result)
+      }
+      const handleNavigation = (target: string) => {
+        const result = parseAniListAuthResponse(target)
+        if (result) finish(result)
+      }
+
+      popup.webContents.on('will-navigate', (_event, target) => handleNavigation(target))
+      popup.webContents.on('will-redirect', (_event, target) => handleNavigation(target))
+      popup.webContents.on('did-navigate-in-page', (_event, target) => handleNavigation(target))
+      popup.once('closed', () => finish(new Error('AniList authentication was cancelled')))
+      popup.loadURL(authUrl.href).catch(error => finish(error))
+    })
   }
 
   hayaseMigrationState () {
@@ -352,6 +415,10 @@ export default class IPC {
     })
     // this.dispatch('open', `intent://localhost:${this.server.address().port}${found.streamURL}#Intent;type=video/any;scheme=http;end;`)
   }
+}
+
+function isSetupVersion (value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) < 1000
 }
 
 function sanitizeImportError (error: unknown, paths: string[]) {

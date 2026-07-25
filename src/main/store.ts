@@ -1,5 +1,4 @@
-import { readFileSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { app } from 'electron'
@@ -12,6 +11,7 @@ const DEFAULTS = {
   player: '',
   torrentPath: '',
   doh: '',
+  setupVersion: 0,
   miningAnki: DEFAULT_MINING_ANKI_SETTINGS,
   // transparency: false,
   torrentSettings: {
@@ -45,7 +45,7 @@ class Store {
 
   set<K extends keyof Store['data']> (key: K, val: Store['data'][K]) {
     this.data[key] = val
-    writeFile(this.path, JSON.stringify(this.data))
+    writeFileSync(this.path, JSON.stringify(this.data))
   }
 
   reload () {

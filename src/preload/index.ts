@@ -25,6 +25,9 @@ const version = ipcRenderer.invoke('version')
 const main = wrap<typeof IPC.prototype>(ipcRenderer)
 
 const native: Partial<Native> = {
+  authAL: (url: string) => main.authAL(url),
+  getSetupVersion: (legacyVersion?: number) => main.getSetupVersion(legacyVersion),
+  completeSetup: (setupVersion: number) => main.completeSetup(setupVersion),
   openURL: (url: string) => main.openURL(url),
   selectPlayer: () => main.selectPlayer(),
   selectDownload: async () => {

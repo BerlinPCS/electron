@@ -22,6 +22,8 @@ import type { MiningLocalAudioState } from '../main/mining-audio.ts'
 
 declare module 'native' {
   interface Native {
+    getSetupVersion: (legacyVersion?: number) => Promise<number>
+    completeSetup: (version: number) => Promise<void>
     hayaseMigrationState: () => Promise<HayaseMigrationState>
     hayaseMigrationImport: () => Promise<boolean>
     miningDictionaryState: () => Promise<MiningDictionaryState>
