@@ -9,47 +9,29 @@ permissions:
   contents: write
 
 jobs:
-  validate-media-sidecars:
+  release:
+    name: Release (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
+            platform: Windows
             architecture: x64
           - os: ubuntu-latest
+            platform: Linux
             architecture: x64
           - os: macos-15-intel
+            platform: macOS
             architecture: x64
-          - os: macos-14
-            architecture: arm64
-    runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Check out Git repository
-        uses: actions/checkout@v4
+      - name: Install Setuptools for Python
+        if: runner.os == 'macOS'
+        run: pip3 install setuptools --break-system-packages
 
-      - name: Setup PNPM
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Validate FFmpeg and FFprobe
-        shell: bash
-        run: |
-          node -e "if (process.arch !== '${{ matrix.architecture }}') throw new Error('Expected ${{ matrix.architecture }}, received ' + process.arch)"
-          pnpm run prepare:ffmpeg
-
-  release:
-    needs: validate-media-sidecars
-    runs-on: windows-latest
-
-    steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
@@ -57,6 +39,7 @@ jobs:
           lfs: 'false'
 
       - name: Check out hoshidicts
+        shell: bash
         run: |
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           git submodule update --init --recursive vendor/hoshidicts
@@ -74,9 +57,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Ensure Electron runtime is installed
+        shell: bash
         run: |
           pnpm rebuild electron
           node -e "const fs = require('node:fs'); const electron = require('electron'); if (!fs.existsSync(electron)) throw new Error('Electron runtime was not installed: ' + electron)"
+
+      - name: Validate runner architecture
+        shell: bash
+        run: node -e "if (process.arch !== '${{ matrix.architecture }}') throw new Error('Expected ${{ matrix.architecture }}, received ' + process.arch)"
 
       - name: Validate release configuration
         shell: bash
@@ -89,9 +77,23 @@ jobs:
           fi
 
       - name: Build and Publish
+        if: runner.os != 'macOS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npm run build:publish
+
+      - name: Build and Publish (macOS)
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.APPLE_SIGNING_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_SIGNING_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         run: npm run build:publish

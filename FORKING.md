@@ -75,20 +75,23 @@ must match:
 pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run lint
-git tag v6.4.92
+git tag v7.0.1
 git push origin main
-git push origin v6.4.92
+git push origin v7.0.1
 ```
 
-GitHub Actions currently builds and publishes only the Windows x64 NSIS
-installer. The macOS and Linux electron-builder targets remain available if
-multi-platform releases are needed later.
+GitHub Actions builds and publishes the Windows x64 NSIS installer, Linux x64
+AppImage and Debian package, and the universal macOS DMG and ZIP from one
+release matrix. Each platform publishes its installer and update metadata to
+the same GitHub release.
 
 ### Signing secrets
 
 For trusted public distribution, configure repository Actions secrets:
 
 - Windows: `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
+- macOS: `APPLE_SIGNING_CERT`, `APPLE_SIGNING_PASSWORD`, `APPLE_ID`,
+  `APPLE_ID_PASSWORD`, and `APPLE_TEAM_ID`
 
 Never commit signing certificates or passwords. Windows can be shipped unsigned
 for testing, but users will see SmartScreen warnings; signing is strongly

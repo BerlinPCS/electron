@@ -48,6 +48,11 @@ autoUpdater.logger = log
 const BASE_URL = is.dev ? 'http://localhost:7344/' : import.meta.env.MAIN_VITE_INTERFACE_URL
 if (!BASE_URL) throw new Error('MAIN_VITE_INTERFACE_URL must be set for production builds')
 const BASE_ORIGIN = new URL(BASE_URL).origin
+const CORS_ORIGINS = new Set([
+  'http://localhost:7344',
+  'https://hayatan.berlinps.workers.dev',
+  'https://hayatan.berlinpcs.dev'
+])
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'https', privileges: { standard: true, bypassCSP: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: false, stream: true, codeCache: true, secure: true } },
@@ -55,13 +60,15 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'hayase-local-audio', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ])
 
-function setCors (record?: Record<string, string[]>, credentails = false) {
+function setCors (record?: Record<string, string[]>, credentials = false) {
   if (!record) return
   if (record['access-control-allow-origin'] ?? record['Access-Control-Allow-Origin']) return
-  record['access-control-allow-origin'] = ['*']
+  record['access-control-allow-origin'] = [
+    credentials && CORS_ORIGINS.has(BASE_ORIGIN) ? BASE_ORIGIN : '*'
+  ]
   record['access-control-allow-methods'] = ['GET, POST, PUT, DELETE, OPTIONS, PATCH']
   record['access-control-allow-headers'] = ['*']
-  if (credentails) record['access-control-allow-credentials'] = ['true']
+  if (credentials) record['access-control-allow-credentials'] = ['true']
 }
 
 export default class App {
