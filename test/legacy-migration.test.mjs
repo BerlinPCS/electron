@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   applyPendingHayaseMigration,
   getHayaseMigrationState,
+  migrateImportedHayaseExtensionStorage,
   migrateImportedHayaseLocalStorage,
   scheduleHayaseMigration
 } from '../src/main/legacy-migration.ts'
@@ -56,6 +57,14 @@ test('detects a pre-mining Hayase profile and replaces compatible Hayatan data',
   assert.equal(await migrateImportedHayaseLocalStorage(current, async () => {
     throw new Error('already migrated')
   }), false)
+  let migratedExtensionOrigin
+  assert.equal(await migrateImportedHayaseExtensionStorage(current, async origin => {
+    migratedExtensionOrigin = origin
+  }), true)
+  assert.equal(migratedExtensionOrigin, 'https://hayase.app')
+  assert.equal(await migrateImportedHayaseExtensionStorage(current, async () => {
+    throw new Error('already migrated')
+  }), false)
 
   assert.equal(await readFile(join(current, 'settings.json'), 'utf8'), '{"torrentPath":"日本語"}')
   assert.equal(await readFile(join(current, 'Cookies'), 'utf8'), 'hayase-cookies')
@@ -68,6 +77,7 @@ test('detects a pre-mining Hayase profile and replaces compatible Hayatan data',
   const marker = JSON.parse(await readFile(join(current, '.hayase-import.json'), 'utf8'))
   assert.equal(marker.source, legacy)
   assert.equal(typeof marker.localStorageMigratedAt, 'string')
+  assert.equal(typeof marker.extensionStorageMigratedAt, 'string')
   await assert.rejects(stat(join(root, '.hayatan-hayase-import.json')))
 })
 

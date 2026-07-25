@@ -164,6 +164,35 @@ export async function migrateImportedHayaseLocalStorage (
   return true
 }
 
+export async function migrateImportedHayaseExtensionStorage (
+  currentUserData: string,
+  migrate: (sourceOrigin: string) => Promise<void>
+): Promise<boolean> {
+  const markerPath = join(currentUserData, IMPORT_MARKER)
+  let marker: {
+    version?: unknown
+    source?: unknown
+    importedAt?: unknown
+    extensionStorageMigratedAt?: unknown
+  }
+  try {
+    marker = JSON.parse(await readFile(markerPath, 'utf8')) as typeof marker
+  } catch {
+    return false
+  }
+  if (marker.version !== 1 || typeof marker.source !== 'string' || typeof marker.importedAt !== 'string') {
+    return false
+  }
+  if (typeof marker.extensionStorageMigratedAt === 'string') return false
+
+  await migrate(LEGACY_APP_ORIGIN)
+  await writeFile(markerPath, JSON.stringify({
+    ...marker,
+    extensionStorageMigratedAt: new Date().toISOString()
+  }))
+  return true
+}
+
 async function findLegacyProfile (appData: string, currentUserData: string): Promise<string | undefined> {
   const current = normalizedPath(currentUserData)
   for (const candidate of [join(appData, 'Hayase'), join(appData, 'hayase')]) {
