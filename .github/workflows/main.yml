@@ -9,7 +9,44 @@ permissions:
   contents: write
 
 jobs:
+  validate-media-sidecars:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            architecture: x64
+          - os: ubuntu-latest
+            architecture: x64
+          - os: macos-15-intel
+            architecture: x64
+          - os: macos-14
+            architecture: arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate FFmpeg and FFprobe
+        shell: bash
+        run: |
+          node -e "if (process.arch !== '${{ matrix.architecture }}') throw new Error('Expected ${{ matrix.architecture }}, received ' + process.arch)"
+          pnpm run prepare:ffmpeg
+
   release:
+    needs: validate-media-sidecars
     runs-on: windows-latest
 
     steps:

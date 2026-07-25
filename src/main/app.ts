@@ -21,6 +21,7 @@ import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/
 import IPC from './ipc.ts'
 import { mediaMimeType, MiningAnkiService } from './mining-anki.ts'
 import { localAudioResponse, MiningAudioRepository } from './mining-audio.ts'
+import { MiningMediaEncoder, resolveMiningMediaExecutable } from './mining-media.ts'
 import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
 import store from './store.ts'
@@ -112,6 +113,19 @@ export default class App {
   })
 
   miningAudio = new MiningAudioRepository(join(app.getPath('userData'), 'mining', 'audio'))
+  miningMedia = new MiningMediaEncoder({
+    ffmpegPath: resolveMiningMediaExecutable('ffmpeg', {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged
+    }),
+    ffprobePath: resolveMiningMediaExecutable('ffprobe', {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged
+    })
+  })
+
   miningAnki = new MiningAnkiService({
     read: () => store.get('miningAnki'),
     write: settings => store.set('miningAnki', settings)
@@ -145,7 +159,7 @@ export default class App {
     if (!this.destroyed && !this.mainWindow.webContents.isDestroyed()) {
       this.mainWindow.webContents.send('mining-anki-event', event)
     }
-  })
+  }, this.miningMedia)
 
   ipc = new IPC(this, this.torrentProcess, this.discord)
   tray = new Tray(process.platform === 'win32' ? ico : process.platform === 'darwin' ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : icon)

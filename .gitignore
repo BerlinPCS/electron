@@ -5,5 +5,4 @@ out
 .eslintcache
 *.log*
 .sidecar-build
-resources/sidecars/hoshidicts-sidecar
-resources/sidecars/hoshidicts-sidecar.exe
+resources/sidecars/*

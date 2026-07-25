@@ -6,6 +6,8 @@ import process from 'node:process'
 
 import log from 'electron-log/main'
 
+import { isCanonicalBase64 } from '../base64.ts'
+
 import { HoshidictsClient, HoshidictsError } from './client.ts'
 
 import type {
@@ -109,7 +111,7 @@ export default class HoshidictsSupervisor {
     )
     const data = protocolString(result.data, 'dictionary media data')
     const size = protocolNumber(result.size, 'dictionary media size')
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+    if (!isCanonicalBase64(data)) {
       throw new HoshidictsError({ code: 'PROTOCOL_ERROR', message: 'Dictionary backend returned invalid media data' })
     }
     const media = Buffer.from(data, 'base64')

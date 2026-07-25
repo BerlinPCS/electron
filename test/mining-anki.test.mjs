@@ -40,6 +40,21 @@ test('client sends API v6 and optional key in main-process POST body', async () 
   assert.deepEqual(requests[0].body, { action: 'version', version: 6, key: 'secret' })
 })
 
+test('client stores multi-megabyte media without overflowing base64 validation', async () => {
+  const data = Buffer.alloc(4 * 1024 * 1024, 0xff).toString('base64')
+  const client = new AnkiConnectClient('http://127.0.0.1:8765', '', async (_url, init) => {
+    const request = JSON.parse(init.body)
+    assert.equal(request.params.data.length, data.length)
+    return jsonResponse('large.webp')
+  })
+  assert.equal(await client.storeMedia({
+    kind: 'screenshot',
+    filename: 'large.webp',
+    mimeType: 'image/webp',
+    data
+  }), 'large.webp')
+})
+
 test('detect discovers and sorts decks/models and their fields', async () => {
   const actions = []
   const client = new AnkiConnectClient('http://127.0.0.1:8765', '', async (_url, init) => {
@@ -80,6 +95,35 @@ test('service auto-selects non-default deck and known Hoshi model with defaults'
   assert.equal(state.settings.deckName, 'Japanese')
   assert.equal(state.settings.modelName, 'Lapis')
   assert.deepEqual(state.settings.fieldMappings, { Expression: '{expression}', Sentence: '{sentence}' })
+})
+
+test('startup reachability probe restores decks, models, and fields for saved settings', async () => {
+  const settings = {
+    ...structuredClone(DEFAULT_MINING_ANKI_SETTINGS),
+    deckName: 'Japanese',
+    modelName: 'Kiku',
+    fieldMappings: { Expression: '{expression}' }
+  }
+  const actions = []
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: () => {}
+  }, async (_url, init) => {
+    const request = JSON.parse(init.body)
+    actions.push(request.action)
+    if (request.action === 'version') return jsonResponse(6)
+    if (request.action === 'deckNames') return jsonResponse(['Japanese'])
+    if (request.action === 'modelNames') return jsonResponse(['Kiku'])
+    if (request.action === 'modelFieldNames') return jsonResponse(['Expression', 'Sentence'])
+    throw new Error(`unexpected action: ${request.action}`)
+  })
+
+  assert.deepEqual(await service.probeReachability(), { status: 'success' })
+  const state = service.state()
+  assert.equal(state.connectionStatus, 'connected')
+  assert.deepEqual(state.decks, ['Japanese'])
+  assert.deepEqual(state.models, [{ name: 'Kiku', fields: ['Expression', 'Sentence'] }])
+  assert.deepEqual(actions, ['version', 'deckNames', 'modelNames', 'modelFieldNames'])
 })
 
 test('duplicate probe uses first field and deck-root/check-all-model options', async () => {
@@ -183,6 +227,145 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
   assert.match(note.fields.Back, /<img src="shot\.png">/)
   assert.match(note.fields.Back, /<img src="dict\.png">/)
   assert.equal(requests.at(-1).action, 'sync')
+})
+
+test('native capture probes word audio, encodes generated media, and preserves original word audio', async () => {
+  const settings = {
+    ...structuredClone(DEFAULT_MINING_ANKI_SETTINGS),
+    deckName: 'Mining',
+    modelName: 'Basic',
+    fieldMappings: {
+      Front: '{expression}',
+      WordAudio: '{audio}',
+      SentenceAudio: '{sentence-audio}',
+      Picture: '{screenshot}'
+    }
+  }
+  const requests = []
+  const encoderCalls = []
+  const encoder = {
+    state: () => ({ available: true }),
+    probeDuration: async media => {
+      assert.equal(media.filename, 'word.opus')
+      return 1.25
+    },
+    encode: async (capture, duration) => {
+      encoderCalls.push({ capture, duration })
+      return [
+        { kind: 'screenshot', filename: 'shot.webp', mimeType: 'image/webp', data: new Uint8Array([1]) },
+        { kind: 'audio', filename: 'sentence.mp3', mimeType: 'audio/mpeg', data: new Uint8Array([2]) }
+      ]
+    },
+    stop: () => {}
+  }
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: () => {}
+  }, async (_url, init) => {
+    const request = JSON.parse(init.body)
+    requests.push(request)
+    if (request.action === 'deckNames') return jsonResponse(['Mining'])
+    if (request.action === 'modelNames') return jsonResponse(['Basic'])
+    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'WordAudio', 'SentenceAudio', 'Picture'])
+    if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
+    if (request.action === 'storeMediaFile') return jsonResponse(request.params.filename)
+    if (request.action === 'addNote') return jsonResponse(7)
+    throw new Error(`unexpected action: ${request.action}`)
+  }, {
+    loadWordAudio: async () => ({ filename: 'word.opus', mimeType: 'audio/ogg', data: new Uint8Array([3]) })
+  }, undefined, encoder)
+  const result = await service.addNote({
+    payload: { expression: '猫', audio: 'https://audio.example/word.opus' },
+    context: {
+      sentence: '猫',
+      selectedText: '猫',
+      title: 'Video',
+      timestamp: 12,
+      media: [],
+      capture: {
+        sourceUrl: 'http://localhost:7344/video.mkv',
+        currentTime: 12,
+        start: 11.8,
+        end: 13.2,
+        captureImage: true,
+        captureAudio: true,
+        imageMode: 'animated',
+        staticFormat: 'webp',
+        animatedFormat: 'webp',
+        quality: 'balanced',
+        maxHeight: 720,
+        fps: 12,
+        syncAnimationToWordAudio: true
+      }
+    }
+  })
+  assert.deepEqual(result, { status: 'success', noteId: 7 })
+  assert.equal(encoderCalls.length, 1)
+  assert.equal(encoderCalls[0].duration, 1.25)
+  const stored = requests.filter(request => request.action === 'storeMediaFile')
+    .map(request => request.params.filename)
+    .sort((a, b) => a.localeCompare(b))
+  assert.deepEqual(stored, ['sentence.mp3', 'shot.webp', 'word.opus'])
+  const note = requests.find(request => request.action === 'addNote').params.note
+  assert.equal(note.fields.WordAudio, '[sound:word.opus]')
+  assert.equal(note.fields.SentenceAudio, '[sound:sentence.mp3]')
+  assert.equal(note.fields.Picture, '<img src="shot.webp">')
+})
+
+test('duplicate rejection happens before native media encoding', async () => {
+  const settings = {
+    ...structuredClone(DEFAULT_MINING_ANKI_SETTINGS),
+    deckName: 'Mining',
+    modelName: 'Basic',
+    fieldMappings: { Front: '{expression}', Picture: '{screenshot}' }
+  }
+  let encoded = false
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: () => {}
+  }, async (_url, init) => {
+    const request = JSON.parse(init.body)
+    if (request.action === 'deckNames') return jsonResponse(['Mining'])
+    if (request.action === 'modelNames') return jsonResponse(['Basic'])
+    if (request.action === 'modelFieldNames') return jsonResponse(['Front', 'Picture'])
+    if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: false, error: 'duplicate' }])
+    throw new Error(`unexpected action: ${request.action}`)
+  }, {}, undefined, {
+    state: () => ({ available: true }),
+    probeDuration: async () => undefined,
+    encode: async () => {
+      encoded = true
+      return []
+    },
+    stop: () => {}
+  })
+  const result = await service.addNote({
+    payload: { expression: '猫' },
+    context: {
+      sentence: '猫',
+      selectedText: '猫',
+      title: 'Video',
+      timestamp: 12,
+      media: [],
+      capture: {
+        sourceUrl: 'http://localhost:7344/video.mkv',
+        currentTime: 12,
+        start: 11.8,
+        end: 13.2,
+        captureImage: true,
+        captureAudio: false,
+        imageMode: 'static',
+        staticFormat: 'webp',
+        animatedFormat: 'webp',
+        quality: 'balanced',
+        maxHeight: 720,
+        fps: 12,
+        syncAnimationToWordAudio: false
+      }
+    }
+  })
+  assert.deepEqual(result, { status: 'duplicate' })
+  assert.equal(encoded, false)
 })
 
 test('legacy disabled setting does not disable configured Anki mining', () => {
