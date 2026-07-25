@@ -6,3 +6,4 @@ out
 *.log*
 .sidecar-build
 resources/sidecars/*
+!resources/sidecars/FFMPEG-LICENSE.txt
