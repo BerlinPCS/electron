@@ -47,7 +47,7 @@ autoUpdater.logger = log
 
 const BASE_URL = is.dev ? 'http://localhost:7344/' : import.meta.env.MAIN_VITE_INTERFACE_URL
 if (!BASE_URL) throw new Error('MAIN_VITE_INTERFACE_URL must be set for production builds')
-const BASE_ORIGIN = new URL(BASE_URL).origin
+export const BASE_ORIGIN = new URL(BASE_URL).origin
 const CORS_ORIGINS = new Set([
   'http://localhost:7344',
   'https://hayatan.berlinps.workers.dev',
@@ -462,7 +462,14 @@ export default class App {
     }
 
     const { port1, port2 } = new MessageChannelMain()
-    this.torrentProcess.once('spawn', () => this.torrentProcess.postMessage({ id: 'settings', data: { ...store.data.torrentSettings, path: store.data.torrentPath, doh: this.hasDOH && store.data.doh } }, [port1]))
+    this.torrentProcess.once('spawn', () => this.torrentProcess.postMessage({
+      id: 'settings',
+      data: {
+        ...store.data.torrentSettings,
+        path: store.data.torrentPath,
+        ...(this.hasDOH && store.data.doh ? { doh: store.data.doh } : {})
+      }
+    }, [port1]))
     ipcMain.once('preload-done', () => {
       this.mainWindow.webContents.postMessage('port', null, [port2])
       ipcMain.on('preload-done', () => reloadPorts())

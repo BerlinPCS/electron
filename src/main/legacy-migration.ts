@@ -1,9 +1,10 @@
-import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative } from 'node:path'
 import process from 'node:process'
 
 const IMPORT_MARKER = '.hayase-import.json'
 const PENDING_IMPORT = '.hayatan-hayase-import.json'
+const LEGACY_APP_ORIGIN = 'https://hayase.app'
 const PROFILE_ENTRIES = new Set([
   'settings.json',
   'Local State',
@@ -28,6 +29,7 @@ const VOLATILE_ENTRIES = new Set([
   'GraphiteDawnCache',
   'ShaderCache',
   'blob_storage',
+  'lockfile',
   'logs'
 ])
 
@@ -133,11 +135,40 @@ export async function applyPendingHayaseMigration ({
   }
 }
 
+export async function migrateImportedHayaseLocalStorage (
+  currentUserData: string,
+  migrate: (sourceOrigin: string) => Promise<void>
+): Promise<boolean> {
+  const markerPath = join(currentUserData, IMPORT_MARKER)
+  let marker: {
+    version?: unknown
+    source?: unknown
+    importedAt?: unknown
+    localStorageMigratedAt?: unknown
+  }
+  try {
+    marker = JSON.parse(await readFile(markerPath, 'utf8')) as typeof marker
+  } catch {
+    return false
+  }
+  if (marker.version !== 1 || typeof marker.source !== 'string' || typeof marker.importedAt !== 'string') {
+    return false
+  }
+  if (typeof marker.localStorageMigratedAt === 'string') return false
+
+  await migrate(LEGACY_APP_ORIGIN)
+  await writeFile(markerPath, JSON.stringify({
+    ...marker,
+    localStorageMigratedAt: new Date().toISOString()
+  }))
+  return true
+}
+
 async function findLegacyProfile (appData: string, currentUserData: string): Promise<string | undefined> {
   const current = normalizedPath(currentUserData)
   for (const candidate of [join(appData, 'Hayase'), join(appData, 'hayase')]) {
     if (normalizedPath(candidate) === current) continue
-    if (await hasProfileData(candidate)) return candidate
+    if (await hasProfileData(candidate)) return await realpath(candidate)
   }
   return undefined
 }

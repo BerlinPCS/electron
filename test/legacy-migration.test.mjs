@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   applyPendingHayaseMigration,
   getHayaseMigrationState,
+  migrateImportedHayaseLocalStorage,
   scheduleHayaseMigration
 } from '../src/main/legacy-migration.ts'
 
@@ -25,10 +26,12 @@ test('detects a pre-mining Hayase profile and replaces compatible Hayatan data',
   await writeFile(join(legacy, 'Cookies'), 'hayase-cookies')
   await writeFile(join(legacy, 'IndexedDB', 'profile.data'), 'hayase-profile')
   await writeFile(join(legacy, 'Cache', 'discard.data'), 'hayase-cache')
+  await writeFile(join(legacy, 'lockfile'), 'stale-hayase-lock')
   await writeFile(join(current, 'settings.json'), '{"torrentPath":"fresh"}')
   await writeFile(join(current, 'IndexedDB', 'profile.data'), 'fresh-profile')
   await writeFile(join(current, 'Cache', 'keep.data'), 'hayatan-cache')
   await writeFile(join(current, 'Session Storage', 'stale.data'), 'hayatan-session')
+  await writeFile(join(current, 'lockfile'), 'live-hayatan-lock')
 
   assert.deepEqual(await getHayaseMigrationState({
     currentUserData: current,
@@ -45,15 +48,26 @@ test('detects a pre-mining Hayase profile and replaces compatible Hayatan data',
     currentUserData: current,
     appData: root
   }), true)
+  let migratedOrigin
+  assert.equal(await migrateImportedHayaseLocalStorage(current, async origin => {
+    migratedOrigin = origin
+  }), true)
+  assert.equal(migratedOrigin, 'https://hayase.app')
+  assert.equal(await migrateImportedHayaseLocalStorage(current, async () => {
+    throw new Error('already migrated')
+  }), false)
 
   assert.equal(await readFile(join(current, 'settings.json'), 'utf8'), '{"torrentPath":"日本語"}')
   assert.equal(await readFile(join(current, 'Cookies'), 'utf8'), 'hayase-cookies')
   assert.equal(await readFile(join(current, 'IndexedDB', 'profile.data'), 'utf8'), 'hayase-profile')
   assert.equal(await readFile(join(current, 'Cache', 'keep.data'), 'utf8'), 'hayatan-cache')
+  assert.equal(await readFile(join(current, 'lockfile'), 'utf8'), 'live-hayatan-lock')
   await assert.rejects(stat(join(current, 'Cache', 'discard.data')))
   await assert.rejects(stat(join(current, 'Session Storage', 'stale.data')))
   assert.equal(await readFile(join(legacy, 'settings.json'), 'utf8'), '{"torrentPath":"日本語"}')
-  assert.equal(JSON.parse(await readFile(join(current, '.hayase-import.json'), 'utf8')).source, legacy)
+  const marker = JSON.parse(await readFile(join(current, '.hayase-import.json'), 'utf8'))
+  assert.equal(marker.source, legacy)
+  assert.equal(typeof marker.localStorageMigratedAt, 'string')
   await assert.rejects(stat(join(root, '.hayatan-hayase-import.json')))
 })
 

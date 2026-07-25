@@ -23,7 +23,10 @@ try {
 process.parentPort.on('message', ({ ports, data: _data }) => {
   let settings: ClientSettings & { path: string, doh?: `https://${keyof typeof PROVIDERS}` } | undefined
   const { id, data } = _data as Message
-  if (id === 'settings') settings = data as ClientSettings & { path: string }
+  if (id === 'settings') {
+    settings = data as ClientSettings & { path: string, doh?: `https://${keyof typeof PROVIDERS}` }
+    if (!isValidDoHEndpoint(settings.doh)) delete settings.doh
+  }
   if (id === 'destroy') tclient?.destroy()
 
   if (ports[0]) {
@@ -38,3 +41,12 @@ process.parentPort.on('message', ({ ports, data: _data }) => {
 })
 
 let tclient: TorrentClient | undefined
+
+function isValidDoHEndpoint (value: unknown): value is `https://${string}` {
+  if (typeof value !== 'string' || !value) return false
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
