@@ -20,7 +20,6 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -31,8 +30,9 @@
 #include <string_view>
 #include <thread>
 #include <utility>
-#include <variant>
 #include <vector>
+
+#include "glaze/json.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -64,446 +64,34 @@ std::string path_to_utf8(const fs::path &path) {
   return {reinterpret_cast<const char *>(value.data()), value.size()};
 }
 
-class Json {
-public:
-  using Array = std::vector<Json>;
-  using Object = std::map<std::string, Json>;
-  using Value = std::variant<std::nullptr_t, bool, int64_t, double, std::string,
-                             Array, Object>;
+using Json = glz::generic_sorted_i64;
+using JsonArray = Json::array_t;
+using JsonObject = Json::object_t;
 
-  Json() : value_(nullptr) {}
-  Json(std::nullptr_t) : value_(nullptr) {}
-  Json(bool value) : value_(value) {}
-  Json(int value) : value_(static_cast<int64_t>(value)) {}
-  Json(int64_t value) : value_(value) {}
-  Json(uint64_t value) : value_(static_cast<int64_t>(value)) {}
-  Json(double value) : value_(value) {}
-  Json(std::string value) : value_(std::move(value)) {}
-  Json(const char *value) : value_(std::string(value)) {}
-  Json(Array value) : value_(std::move(value)) {}
-  Json(Object value) : value_(std::move(value)) {}
-
-  bool is_null() const {
-    return std::holds_alternative<std::nullptr_t>(value_);
+Json parse_json(std::string_view input) {
+  Json result;
+  if (auto error = glz::read_json(result, input)) {
+    throw std::runtime_error(glz::format_error(error, input));
   }
-  bool is_bool() const { return std::holds_alternative<bool>(value_); }
-  bool is_int() const { return std::holds_alternative<int64_t>(value_); }
-  bool is_number() const {
-    return is_int() || std::holds_alternative<double>(value_);
+  return result;
+}
+
+std::string stringify_json(const Json &value) {
+  auto result = glz::write_json(value);
+  if (!result) {
+    throw std::runtime_error("could not serialize JSON");
   }
-  bool is_string() const { return std::holds_alternative<std::string>(value_); }
-  bool is_array() const { return std::holds_alternative<Array>(value_); }
-  bool is_object() const { return std::holds_alternative<Object>(value_); }
+  return std::move(*result);
+}
 
-  bool as_bool() const { return std::get<bool>(value_); }
-  int64_t as_int() const {
-    if (is_int()) {
-      return std::get<int64_t>(value_);
-    }
-    return static_cast<int64_t>(std::get<double>(value_));
+const Json *find_member(const Json &value, std::string_view name) {
+  if (!value.is_object()) {
+    return nullptr;
   }
-  const std::string &as_string() const { return std::get<std::string>(value_); }
-  const Array &as_array() const { return std::get<Array>(value_); }
-  Array &as_array() { return std::get<Array>(value_); }
-  const Object &as_object() const { return std::get<Object>(value_); }
-  Object &as_object() { return std::get<Object>(value_); }
-
-  const Json *find(std::string_view key) const {
-    if (!is_object()) {
-      return nullptr;
-    }
-    auto it = as_object().find(std::string(key));
-    return it == as_object().end() ? nullptr : &it->second;
-  }
-
-  static Json parse(std::string_view input) {
-    Parser parser(input);
-    Json result = parser.parse_value();
-    parser.skip_whitespace();
-    if (!parser.at_end()) {
-      throw std::runtime_error("unexpected data after JSON value");
-    }
-    return result;
-  }
-
-  std::string stringify() const {
-    std::string output;
-    output.reserve(256);
-    append_to(output);
-    return output;
-  }
-
-private:
-  class Parser {
-  public:
-    explicit Parser(std::string_view input) : input_(input) {}
-
-    Json parse_value() {
-      skip_whitespace();
-      if (at_end()) {
-        fail("expected JSON value");
-      }
-      switch (input_[position_]) {
-      case 'n':
-        consume_literal("null");
-        return nullptr;
-      case 't':
-        consume_literal("true");
-        return true;
-      case 'f':
-        consume_literal("false");
-        return false;
-      case '"':
-        return parse_string();
-      case '[':
-        return parse_array();
-      case '{':
-        return parse_object();
-      default:
-        if (input_[position_] == '-' ||
-            (input_[position_] >= '0' && input_[position_] <= '9')) {
-          return parse_number();
-        }
-        fail("invalid JSON value");
-      }
-    }
-
-    void skip_whitespace() {
-      while (!at_end() &&
-             (input_[position_] == ' ' || input_[position_] == '\t' ||
-              input_[position_] == '\r' || input_[position_] == '\n')) {
-        ++position_;
-      }
-    }
-
-    bool at_end() const { return position_ >= input_.size(); }
-
-  private:
-    [[noreturn]] void fail(const std::string &message) const {
-      throw std::runtime_error(message + " at byte " +
-                               std::to_string(position_));
-    }
-
-    void consume_literal(std::string_view literal) {
-      if (input_.substr(position_, literal.size()) != literal) {
-        fail("invalid literal");
-      }
-      position_ += literal.size();
-    }
-
-    static void append_utf8(std::string &output, uint32_t codepoint) {
-      if (codepoint <= 0x7f) {
-        output.push_back(static_cast<char>(codepoint));
-      } else if (codepoint <= 0x7ff) {
-        output.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
-        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-      } else if (codepoint <= 0xffff) {
-        output.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
-        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-      } else {
-        output.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
-        output.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-      }
-    }
-
-    uint32_t parse_hex4() {
-      if (position_ + 4 > input_.size()) {
-        fail("incomplete unicode escape");
-      }
-      uint32_t value = 0;
-      for (int i = 0; i < 4; ++i) {
-        char c = input_[position_++];
-        value <<= 4;
-        if (c >= '0' && c <= '9') {
-          value |= static_cast<uint32_t>(c - '0');
-        } else if (c >= 'a' && c <= 'f') {
-          value |= static_cast<uint32_t>(c - 'a' + 10);
-        } else if (c >= 'A' && c <= 'F') {
-          value |= static_cast<uint32_t>(c - 'A' + 10);
-        } else {
-          fail("invalid unicode escape");
-        }
-      }
-      return value;
-    }
-
-    std::string parse_string() {
-      if (input_[position_++] != '"') {
-        fail("expected string");
-      }
-      std::string output;
-      while (!at_end()) {
-        unsigned char c = static_cast<unsigned char>(input_[position_++]);
-        if (c == '"') {
-          return output;
-        }
-        if (c < 0x20) {
-          fail("unescaped control character");
-        }
-        if (c != '\\') {
-          output.push_back(static_cast<char>(c));
-          continue;
-        }
-        if (at_end()) {
-          fail("incomplete escape");
-        }
-        char escaped = input_[position_++];
-        switch (escaped) {
-        case '"':
-        case '\\':
-        case '/':
-          output.push_back(escaped);
-          break;
-        case 'b':
-          output.push_back('\b');
-          break;
-        case 'f':
-          output.push_back('\f');
-          break;
-        case 'n':
-          output.push_back('\n');
-          break;
-        case 'r':
-          output.push_back('\r');
-          break;
-        case 't':
-          output.push_back('\t');
-          break;
-        case 'u': {
-          uint32_t codepoint = parse_hex4();
-          if (codepoint >= 0xd800 && codepoint <= 0xdbff) {
-            if (position_ + 2 > input_.size() || input_[position_] != '\\' ||
-                input_[position_ + 1] != 'u') {
-              fail("unpaired high surrogate");
-            }
-            position_ += 2;
-            uint32_t low = parse_hex4();
-            if (low < 0xdc00 || low > 0xdfff) {
-              fail("invalid low surrogate");
-            }
-            codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00);
-          } else if (codepoint >= 0xdc00 && codepoint <= 0xdfff) {
-            fail("unpaired low surrogate");
-          }
-          append_utf8(output, codepoint);
-          break;
-        }
-        default:
-          fail("invalid escape");
-        }
-      }
-      fail("unterminated string");
-    }
-
-    Json parse_array() {
-      ++position_;
-      Array result;
-      skip_whitespace();
-      if (!at_end() && input_[position_] == ']') {
-        ++position_;
-        return result;
-      }
-      while (true) {
-        result.push_back(parse_value());
-        skip_whitespace();
-        if (at_end()) {
-          fail("unterminated array");
-        }
-        char separator = input_[position_++];
-        if (separator == ']') {
-          return result;
-        }
-        if (separator != ',') {
-          fail("expected array separator");
-        }
-      }
-    }
-
-    Json parse_object() {
-      ++position_;
-      Object result;
-      skip_whitespace();
-      if (!at_end() && input_[position_] == '}') {
-        ++position_;
-        return result;
-      }
-      while (true) {
-        skip_whitespace();
-        if (at_end() || input_[position_] != '"') {
-          fail("expected object key");
-        }
-        std::string key = parse_string();
-        skip_whitespace();
-        if (at_end() || input_[position_++] != ':') {
-          fail("expected colon");
-        }
-        result.insert_or_assign(std::move(key), parse_value());
-        skip_whitespace();
-        if (at_end()) {
-          fail("unterminated object");
-        }
-        char separator = input_[position_++];
-        if (separator == '}') {
-          return result;
-        }
-        if (separator != ',') {
-          fail("expected object separator");
-        }
-      }
-    }
-
-    Json parse_number() {
-      const std::size_t start = position_;
-      if (input_[position_] == '-') {
-        ++position_;
-      }
-      if (at_end()) {
-        fail("incomplete number");
-      }
-      if (input_[position_] == '0') {
-        ++position_;
-      } else {
-        if (input_[position_] < '1' || input_[position_] > '9') {
-          fail("invalid number");
-        }
-        while (!at_end() && input_[position_] >= '0' &&
-               input_[position_] <= '9') {
-          ++position_;
-        }
-      }
-      bool floating = false;
-      if (!at_end() && input_[position_] == '.') {
-        floating = true;
-        ++position_;
-        if (at_end() || input_[position_] < '0' || input_[position_] > '9') {
-          fail("invalid fraction");
-        }
-        while (!at_end() && input_[position_] >= '0' &&
-               input_[position_] <= '9') {
-          ++position_;
-        }
-      }
-      if (!at_end() && (input_[position_] == 'e' || input_[position_] == 'E')) {
-        floating = true;
-        ++position_;
-        if (!at_end() &&
-            (input_[position_] == '+' || input_[position_] == '-')) {
-          ++position_;
-        }
-        if (at_end() || input_[position_] < '0' || input_[position_] > '9') {
-          fail("invalid exponent");
-        }
-        while (!at_end() && input_[position_] >= '0' &&
-               input_[position_] <= '9') {
-          ++position_;
-        }
-      }
-      std::string_view number = input_.substr(start, position_ - start);
-      if (!floating) {
-        int64_t integer = 0;
-        auto [end, error] = std::from_chars(
-            number.data(), number.data() + number.size(), integer);
-        if (error == std::errc{} && end == number.data() + number.size()) {
-          return integer;
-        }
-      }
-      std::string copy(number);
-      char *end = nullptr;
-      double value = std::strtod(copy.c_str(), &end);
-      if (!end || end != copy.c_str() + copy.size()) {
-        fail("invalid number");
-      }
-      return value;
-    }
-
-    std::string_view input_;
-    std::size_t position_ = 0;
-  };
-
-  static void append_escaped(std::string &output, std::string_view value) {
-    static constexpr char hex[] = "0123456789abcdef";
-    output.push_back('"');
-    for (unsigned char c : value) {
-      switch (c) {
-      case '"':
-        output += "\\\"";
-        break;
-      case '\\':
-        output += "\\\\";
-        break;
-      case '\b':
-        output += "\\b";
-        break;
-      case '\f':
-        output += "\\f";
-        break;
-      case '\n':
-        output += "\\n";
-        break;
-      case '\r':
-        output += "\\r";
-        break;
-      case '\t':
-        output += "\\t";
-        break;
-      default:
-        if (c < 0x20) {
-          output += "\\u00";
-          output.push_back(hex[(c >> 4) & 0xf]);
-          output.push_back(hex[c & 0xf]);
-        } else {
-          output.push_back(static_cast<char>(c));
-        }
-      }
-    }
-    output.push_back('"');
-  }
-
-  void append_to(std::string &output) const {
-    if (is_null()) {
-      output += "null";
-    } else if (is_bool()) {
-      output += as_bool() ? "true" : "false";
-    } else if (is_int()) {
-      output += std::to_string(as_int());
-    } else if (std::holds_alternative<double>(value_)) {
-      std::ostringstream stream;
-      stream << std::setprecision(17) << std::get<double>(value_);
-      output += stream.str();
-    } else if (is_string()) {
-      append_escaped(output, as_string());
-    } else if (is_array()) {
-      output.push_back('[');
-      bool first = true;
-      for (const auto &value : as_array()) {
-        if (!first) {
-          output.push_back(',');
-        }
-        first = false;
-        value.append_to(output);
-      }
-      output.push_back(']');
-    } else {
-      output.push_back('{');
-      bool first = true;
-      for (const auto &[key, value] : as_object()) {
-        if (!first) {
-          output.push_back(',');
-        }
-        first = false;
-        append_escaped(output, key);
-        output.push_back(':');
-        value.append_to(output);
-      }
-      output.push_back('}');
-    }
-  }
-
-  Value value_;
-};
+  const auto &object = value.get_object();
+  const auto found = object.find(name);
+  return found == object.end() ? nullptr : &found->second;
+}
 
 class SidecarError : public std::runtime_error {
 public:
@@ -515,15 +103,15 @@ private:
   std::string code_;
 };
 
-const Json::Object &require_object(const Json &value, std::string_view name) {
+const JsonObject &require_object(const Json &value, std::string_view name) {
   if (!value.is_object()) {
     throw SidecarError("INVALID_PARAMS",
                        std::string(name) + " must be an object");
   }
-  return value.as_object();
+  return value.get_object();
 }
 
-const Json &require_member(const Json::Object &object, std::string_view name) {
+const Json &require_member(const JsonObject &object, std::string_view name) {
   auto it = object.find(std::string(name));
   if (it == object.end()) {
     throw SidecarError("INVALID_PARAMS",
@@ -532,47 +120,47 @@ const Json &require_member(const Json::Object &object, std::string_view name) {
   return it->second;
 }
 
-std::string require_string(const Json::Object &object, std::string_view name) {
+std::string require_string(const JsonObject &object, std::string_view name) {
   const Json &value = require_member(object, name);
   if (!value.is_string()) {
     throw SidecarError("INVALID_PARAMS",
                        std::string(name) + " must be a string");
   }
-  return value.as_string();
+  return value.get_string();
 }
 
-int64_t require_integer(const Json::Object &object, std::string_view name) {
+int64_t require_integer(const JsonObject &object, std::string_view name) {
   const Json &value = require_member(object, name);
-  if (!value.is_int()) {
+  if (!value.is_int64()) {
     throw SidecarError("INVALID_PARAMS",
                        std::string(name) + " must be an integer");
   }
-  return value.as_int();
+  return value.get<int64_t>();
 }
 
-bool optional_bool(const Json::Object &object, std::string_view name,
+bool optional_bool(const JsonObject &object, std::string_view name,
                    bool fallback) {
   auto it = object.find(std::string(name));
   if (it == object.end()) {
     return fallback;
   }
-  if (!it->second.is_bool()) {
+  if (!it->second.is_boolean()) {
     throw SidecarError("INVALID_PARAMS",
                        std::string(name) + " must be a boolean");
   }
-  return it->second.as_bool();
+  return it->second.get_boolean();
 }
 
-bool require_bool(const Json::Object &object, std::string_view name) {
+bool require_bool(const JsonObject &object, std::string_view name) {
   const Json &value = require_member(object, name);
-  if (!value.is_bool()) {
+  if (!value.is_boolean()) {
     throw SidecarError("INVALID_PARAMS",
                        std::string(name) + " must be a boolean");
   }
-  return value.as_bool();
+  return value.get_boolean();
 }
 
-std::vector<std::string> require_string_array(const Json::Object &object,
+std::vector<std::string> require_string_array(const JsonObject &object,
                                               std::string_view name) {
   const Json &value = require_member(object, name);
   if (!value.is_array()) {
@@ -580,19 +168,19 @@ std::vector<std::string> require_string_array(const Json::Object &object,
                        std::string(name) + " must be an array");
   }
   std::vector<std::string> result;
-  result.reserve(value.as_array().size());
-  for (const auto &item : value.as_array()) {
+  result.reserve(value.get_array().size());
+  for (const auto &item : value.get_array()) {
     if (!item.is_string()) {
       throw SidecarError("INVALID_PARAMS",
                          std::string(name) + " entries must be strings");
     }
-    result.push_back(item.as_string());
+    result.push_back(item.get_string());
   }
   return result;
 }
 
 Json string_array(const std::vector<std::string> &values) {
-  Json::Array result;
+  JsonArray result;
   result.reserve(values.size());
   for (const auto &value : values) {
     result.emplace_back(value);
@@ -706,20 +294,20 @@ struct Manifest {
 };
 
 Json counts_json(const Counts &counts) {
-  return Json::Object{{"term", counts.term},
+  return JsonObject{{"term", counts.term},
                       {"frequency", counts.frequency},
                       {"pitch", counts.pitch},
                       {"media", counts.media}};
 }
 
 Json enabled_json(const Enabled &enabled) {
-  return Json::Object{{"term", enabled.term},
+  return JsonObject{{"term", enabled.term},
                       {"frequency", enabled.frequency},
                       {"pitch", enabled.pitch}};
 }
 
 Json dictionary_json(const DictionaryRecord &dictionary) {
-  return Json::Object{{"id", dictionary.id},
+  return JsonObject{{"id", dictionary.id},
                       {"title", dictionary.title},
                       {"revision", dictionary.revision},
                       {"format", dictionary.format},
@@ -729,41 +317,41 @@ Json dictionary_json(const DictionaryRecord &dictionary) {
 }
 
 Json manifest_json(const Manifest &manifest) {
-  Json::Array dictionaries;
+  JsonArray dictionaries;
   dictionaries.reserve(manifest.dictionaries.size());
   for (const auto &dictionary : manifest.dictionaries) {
     dictionaries.push_back(dictionary_json(dictionary));
   }
-  return Json::Object{
+  return JsonObject{
       {"schemaVersion", manifest.schemaVersion},
       {"generation", manifest.generation},
       {"dictionaries", std::move(dictionaries)},
       {"order",
-       Json::Object{{"term", string_array(manifest.order.term)},
+       JsonObject{{"term", string_array(manifest.order.term)},
                     {"frequency", string_array(manifest.order.frequency)},
                     {"pitch", string_array(manifest.order.pitch)}}}};
 }
 
-uint64_t optional_unsigned(const Json::Object &object, std::string_view name,
+uint64_t optional_unsigned(const JsonObject &object, std::string_view name,
                            uint64_t fallback = 0) {
   auto it = object.find(std::string(name));
-  if (it == object.end() || !it->second.is_int() || it->second.as_int() < 0) {
+  if (it == object.end() || !it->second.is_int64() || it->second.get<int64_t>() < 0) {
     return fallback;
   }
-  return static_cast<uint64_t>(it->second.as_int());
+  return static_cast<uint64_t>(it->second.get<int64_t>());
 }
 
-std::string optional_string(const Json::Object &object, std::string_view name,
+std::string optional_string(const JsonObject &object, std::string_view name,
                             std::string fallback = {}) {
   auto it = object.find(std::string(name));
-  return it != object.end() && it->second.is_string() ? it->second.as_string()
+  return it != object.end() && it->second.is_string() ? it->second.get_string()
                                                       : std::move(fallback);
 }
 
-bool optional_boolean(const Json::Object &object, std::string_view name,
+bool optional_boolean(const JsonObject &object, std::string_view name,
                       bool fallback = false) {
   auto it = object.find(std::string(name));
-  return it != object.end() && it->second.is_bool() ? it->second.as_bool()
+  return it != object.end() && it->second.is_boolean() ? it->second.get_boolean()
                                                     : fallback;
 }
 
@@ -781,28 +369,28 @@ Manifest parse_manifest(const Json &json) {
   if (!dictionaries.is_array()) {
     throw std::runtime_error("manifest dictionaries must be an array");
   }
-  for (const Json &value : dictionaries.as_array()) {
+  for (const Json &value : dictionaries.get_array()) {
     const auto &item = require_object(value, "dictionary");
     DictionaryRecord dictionary;
     dictionary.id = require_string(item, "id");
     dictionary.title = require_string(item, "title");
     dictionary.revision = optional_string(item, "revision");
     dictionary.format = static_cast<int64_t>(optional_unsigned(item, "format"));
-    if (const Json *counts = value.find("counts");
+    if (const Json *counts = find_member(value, "counts");
         counts && counts->is_object()) {
-      dictionary.counts.term = optional_unsigned(counts->as_object(), "term");
+      dictionary.counts.term = optional_unsigned(counts->get_object(), "term");
       dictionary.counts.frequency =
-          optional_unsigned(counts->as_object(), "frequency");
-      dictionary.counts.pitch = optional_unsigned(counts->as_object(), "pitch");
-      dictionary.counts.media = optional_unsigned(counts->as_object(), "media");
+          optional_unsigned(counts->get_object(), "frequency");
+      dictionary.counts.pitch = optional_unsigned(counts->get_object(), "pitch");
+      dictionary.counts.media = optional_unsigned(counts->get_object(), "media");
     }
-    if (const Json *enabled = value.find("enabled");
+    if (const Json *enabled = find_member(value, "enabled");
         enabled && enabled->is_object()) {
-      dictionary.enabled.term = optional_boolean(enabled->as_object(), "term");
+      dictionary.enabled.term = optional_boolean(enabled->get_object(), "term");
       dictionary.enabled.frequency =
-          optional_boolean(enabled->as_object(), "frequency");
+          optional_boolean(enabled->get_object(), "frequency");
       dictionary.enabled.pitch =
-          optional_boolean(enabled->as_object(), "pitch");
+          optional_boolean(enabled->get_object(), "pitch");
     }
     dictionary.term_backed_pitch = optional_boolean(item, "termBackedPitch");
     manifest.dictionaries.push_back(std::move(dictionary));
@@ -823,20 +411,20 @@ DictionaryRecord parse_dictionary_record(const Json &value) {
   dictionary.title = require_string(item, "title");
   dictionary.revision = optional_string(item, "revision");
   dictionary.format = static_cast<int64_t>(optional_unsigned(item, "format"));
-  if (const Json *counts = value.find("counts");
+  if (const Json *counts = find_member(value, "counts");
       counts && counts->is_object()) {
-    dictionary.counts.term = optional_unsigned(counts->as_object(), "term");
+    dictionary.counts.term = optional_unsigned(counts->get_object(), "term");
     dictionary.counts.frequency =
-        optional_unsigned(counts->as_object(), "frequency");
-    dictionary.counts.pitch = optional_unsigned(counts->as_object(), "pitch");
-    dictionary.counts.media = optional_unsigned(counts->as_object(), "media");
+        optional_unsigned(counts->get_object(), "frequency");
+    dictionary.counts.pitch = optional_unsigned(counts->get_object(), "pitch");
+    dictionary.counts.media = optional_unsigned(counts->get_object(), "media");
   }
-  if (const Json *enabled = value.find("enabled");
+  if (const Json *enabled = find_member(value, "enabled");
       enabled && enabled->is_object()) {
-    dictionary.enabled.term = optional_boolean(enabled->as_object(), "term");
+    dictionary.enabled.term = optional_boolean(enabled->get_object(), "term");
     dictionary.enabled.frequency =
-        optional_boolean(enabled->as_object(), "frequency");
-    dictionary.enabled.pitch = optional_boolean(enabled->as_object(), "pitch");
+        optional_boolean(enabled->get_object(), "frequency");
+    dictionary.enabled.pitch = optional_boolean(enabled->get_object(), "pitch");
   }
   dictionary.term_backed_pitch = optional_boolean(item, "termBackedPitch");
   return dictionary;
@@ -849,7 +437,7 @@ struct IndexMetadata {
 };
 
 IndexMetadata read_index(const fs::path &dictionary_path) {
-  Json index = Json::parse(read_file(dictionary_path / "index.json"));
+  Json index = parse_json(read_file(dictionary_path / "index.json"));
   const auto &object = require_object(index, "index.json");
   IndexMetadata metadata;
   metadata.title = require_string(object, "title");
@@ -881,7 +469,7 @@ std::string preflight_dictionary_zip(const fs::path &zip_path) {
   if (index_position < 0) {
     throw SidecarError("IMPORT_FAILED", "dictionary ZIP is missing index.json");
   }
-  const Json index = Json::parse(zip.read(index_position));
+  const Json index = parse_json(zip.read(index_position));
   const std::string title =
       require_string(require_object(index, "index.json"), "title");
   if (!safe_dictionary_title(title)) {
@@ -1053,15 +641,15 @@ std::size_t utf16_length(std::string_view text) {
 }
 
 Json lookup_entry_json(const LookupResult &result) {
-  Json::Array trace;
+  JsonArray trace;
   for (const auto &transform : result.trace) {
-    trace.emplace_back(Json::Object{{"name", transform.name},
+    trace.emplace_back(JsonObject{{"name", transform.name},
                                     {"description", transform.description}});
   }
 
-  Json::Array glossaries;
+  JsonArray glossaries;
   for (const auto &glossary : result.term.glossaries) {
-    glossaries.emplace_back(Json::Object{
+    glossaries.emplace_back(JsonObject{
         {"dictionary", glossary.dict_name},
         {"content", glossary.glossary},
         {"definitionTags", glossary.definition_tags},
@@ -1069,31 +657,31 @@ Json lookup_entry_json(const LookupResult &result) {
     });
   }
 
-  Json::Array frequencies;
+  JsonArray frequencies;
   for (const auto &group : result.term.frequencies) {
-    Json::Array values;
+    JsonArray values;
     for (const auto &frequency : group.frequencies) {
       values.emplace_back(
-          Json::Object{{"value", frequency.value},
+          JsonObject{{"value", frequency.value},
                        {"displayValue", frequency.display_value}});
     }
-    frequencies.emplace_back(Json::Object{{"dictionary", group.dict_name},
+    frequencies.emplace_back(JsonObject{{"dictionary", group.dict_name},
                                           {"frequencies", std::move(values)}});
   }
 
-  Json::Array pitches;
+  JsonArray pitches;
   for (const auto &group : result.term.pitches) {
-    Json::Array positions;
+    JsonArray positions;
     for (int position : group.pitch_positions) {
       positions.emplace_back(position);
     }
     pitches.emplace_back(
-        Json::Object{{"dictionary", group.dict_name},
+        JsonObject{{"dictionary", group.dict_name},
                      {"pitchPositions", std::move(positions)},
                      {"transcriptions", string_array(group.transcriptions)}});
   }
 
-  return Json::Object{
+  return JsonObject{
       {"matched", result.matched},
       {"deinflected", result.deinflected},
       {"trace", std::move(trace)},
@@ -1153,7 +741,7 @@ public:
       }
       Json request;
       try {
-        request = Json::parse(line);
+        request = parse_json(line);
         dispatch(request);
       } catch (const SidecarError &error) {
         send_error(request_id(request), error.code(), error.what());
@@ -1167,8 +755,10 @@ public:
 
 private:
   static int64_t request_id(const Json &request) {
-    const Json *id = request.find("id");
-    return id && id->is_int() && id->as_int() >= 0 ? id->as_int() : 0;
+    const Json *id = find_member(request, "id");
+    return id && id->is_int64() && id->get<int64_t>() >= 0
+               ? id->get<int64_t>()
+               : 0;
   }
 
   void initialize() {
@@ -1186,10 +776,19 @@ private:
                   << ": " << error.message() << '\n';
       }
     }
+    for (const auto &entry : fs::directory_iterator(trash_)) {
+      std::error_code error;
+      fs::remove_all(entry.path(), error);
+      if (error) {
+        std::cerr << "could not clear stale trash path "
+                  << path_to_utf8(entry.path()) << ": " << error.message()
+                  << '\n';
+      }
+    }
 
     if (fs::is_regular_file(manifest_path_)) {
       try {
-        manifest_ = parse_manifest(Json::parse(read_file(manifest_path_)));
+        manifest_ = parse_manifest(parse_json(read_file(manifest_path_)));
       } catch (const std::exception &error) {
         fs::path invalid = manifest_path_;
         invalid += ".invalid";
@@ -1233,7 +832,7 @@ private:
         const fs::path metadata = entry.path() / ".sidecar.json";
         if (fs::is_regular_file(metadata)) {
           dictionary =
-              parse_dictionary_record(Json::parse(read_file(metadata)));
+              parse_dictionary_record(parse_json(read_file(metadata)));
           dictionary.id = id;
         } else {
           IndexMetadata index = read_index(entry.path());
@@ -1287,15 +886,15 @@ private:
   }
 
   void save_manifest(const Manifest &manifest) const {
-    write_atomic(manifest_path_, manifest_json(manifest).stringify());
+    write_atomic(manifest_path_, stringify_json(manifest_json(manifest)));
   }
 
   void save_manifest() const { save_manifest(manifest_); }
 
   Json state_json() const {
     std::lock_guard lock(state_mutex_);
-    Json::Array dictionaries;
-    Json::Object styles;
+    JsonArray dictionaries;
+    JsonObject styles;
     for (const auto &dictionary : manifest_.dictionaries) {
       dictionaries.push_back(dictionary_json(dictionary));
       fs::path stylesheet = data_ / dictionary.id / "styles.css";
@@ -1308,12 +907,12 @@ private:
         }
       }
     }
-    return Json::Object{
+    return JsonObject{
         {"available", true},
         {"generation", manifest_.generation},
         {"dictionaries", std::move(dictionaries)},
         {"order",
-         Json::Object{{"term", string_array(manifest_.order.term)},
+         JsonObject{{"term", string_array(manifest_.order.term)},
                       {"frequency", string_array(manifest_.order.frequency)},
                       {"pitch", string_array(manifest_.order.pitch)}}},
         {"styles", std::move(styles)},
@@ -1328,16 +927,16 @@ private:
     }
     std::string method = require_string(object, "method");
     Json params =
-        object.contains("params") ? object.at("params") : Json(Json::Object{});
+        object.contains("params") ? object.at("params") : Json(JsonObject{});
     require_object(params, "params");
 
     if (method == "hello") {
       send_result(
-          id, Json::Object{
+          id, JsonObject{
                   {"protocolVersion", 1},
                   {"backendVersion", "1.0.0"},
                   {"capabilities",
-                   Json::Array{"lookup", "import", "term", "frequency", "pitch",
+                   JsonArray{"lookup", "import", "term", "frequency", "pitch",
                                "media", "styles", "deinflection",
                                "supersession"}},
               });
@@ -1358,7 +957,7 @@ private:
       }
       admin_condition_.notify_one();
     } else if (method == "shutdown") {
-      send_result(id, Json::Object{{"ok", true}});
+      send_result(id, JsonObject{{"ok", true}});
       stopping_ = true;
       lookup_condition_.notify_all();
       admin_condition_.notify_all();
@@ -1400,11 +999,11 @@ private:
       }
 
       try {
-        Json result = perform_lookup(command.params);
+        Json result = perform_lookup(command.params, command.sequence);
         bool stale = false;
         {
           std::lock_guard lock(lookup_mutex_);
-          stale = command.sequence != latest_lookup_sequence_;
+          stale = command.sequence != latest_lookup_sequence_.load();
         }
         if (stale) {
           send_error(command.id, "SUPERSEDED",
@@ -1425,7 +1024,7 @@ private:
     }
   }
 
-  Json perform_lookup(const Json &params) {
+  Json perform_lookup(const Json &params, uint64_t sequence) {
     const auto &object = require_object(params, "lookup params");
     std::string text = require_string(object, "text");
     int64_t offset = require_integer(object, "offset");
@@ -1447,17 +1046,19 @@ private:
       std::lock_guard lock(state_mutex_);
       bundle = bundle_;
     }
-    auto results = bundle->lookup.lookup(text.substr(*byte_offset),
-                                         static_cast<int>(max_results),
-                                         static_cast<std::size_t>(scan_length));
-    Json::Array entries;
+    auto results = bundle->lookup.lookup(
+        text.substr(*byte_offset), static_cast<int>(max_results),
+        static_cast<std::size_t>(scan_length), [this, sequence] {
+          return stopping_ || sequence != latest_lookup_sequence_.load();
+        });
+    JsonArray entries;
     entries.reserve(results.size());
     std::size_t length = 0;
     for (const auto &result : results) {
       length = std::max(length, utf16_length(result.matched));
       entries.push_back(lookup_entry_json(result));
     }
-    return Json::Object{{"length", static_cast<uint64_t>(length)},
+    return JsonObject{{"length", static_cast<uint64_t>(length)},
                         {"entries", std::move(entries)}};
   }
 
@@ -1485,7 +1086,7 @@ private:
       throw SidecarError("MEDIA_TOO_LARGE",
                          "dictionary media exceeds the 5 MiB limit");
     }
-    return Json::Object{
+    return JsonObject{
         {"data", base64_encode(media.data(), media.size())},
         {"size", static_cast<uint64_t>(media.size())},
     };
@@ -1573,7 +1174,7 @@ private:
           auto progress = [this, &operation_id, &paths, i, &file_name](
                               std::string phase, uint64_t completed,
                               uint64_t total, std::string dictionary = {}) {
-            Json::Object data{
+            JsonObject data{
                 {"operationId", operation_id},
                 {"fileIndex", static_cast<uint64_t>(i)},
                 {"fileCount", static_cast<uint64_t>(paths.size())},
@@ -1680,7 +1281,7 @@ private:
               .term_backed_pitch = term_backed_pitch,
           };
           write_atomic(staged / ".sidecar.json",
-                       dictionary_json(record).stringify());
+                       stringify_json(dictionary_json(record)));
           progress("finalizing", 1, 1, index.title);
           imports.push_back(Imported{.record = std::move(record),
                                      .staged = std::move(staged),
@@ -1692,7 +1293,7 @@ private:
           fs::remove_all(work, ignored);
           send_event(
               "importError",
-              Json::Object{{"operationId", operation_id},
+              JsonObject{{"operationId", operation_id},
                            {"fileIndex", static_cast<uint64_t>(i)},
                            {"fileCount", static_cast<uint64_t>(paths.size())},
                            {"fileName", path_to_utf8(zip_path.filename())},
@@ -1703,7 +1304,7 @@ private:
           fs::remove_all(work, ignored);
           send_event(
               "importError",
-              Json::Object{{"operationId", operation_id},
+              JsonObject{{"operationId", operation_id},
                            {"fileIndex", static_cast<uint64_t>(i)},
                            {"fileCount", static_cast<uint64_t>(paths.size())},
                            {"fileName", path_to_utf8(zip_path.filename())},
@@ -1770,7 +1371,7 @@ private:
       for (const auto &imported : imports) {
         send_event(
             "importProgress",
-            Json::Object{
+            JsonObject{
                 {"operationId", operation_id},
                 {"fileIndex", static_cast<uint64_t>(imported.file_index)},
                 {"fileCount", static_cast<uint64_t>(paths.size())},
@@ -1904,12 +1505,19 @@ private:
       bundle_ = build_bundle(manifest_);
       throw;
     }
+    std::error_code cleanup_error;
+    fs::remove_all(destination, cleanup_error);
+    if (cleanup_error) {
+      std::cerr << "could not delete removed dictionary "
+                << path_to_utf8(destination) << ": " << cleanup_error.message()
+                << '\n';
+    }
     return state_json_unlocked();
   }
 
   Json state_json_unlocked() const {
-    Json::Array dictionaries;
-    Json::Object styles;
+    JsonArray dictionaries;
+    JsonObject styles;
     for (const auto &dictionary : manifest_.dictionaries) {
       dictionaries.push_back(dictionary_json(dictionary));
       fs::path stylesheet = data_ / dictionary.id / "styles.css";
@@ -1920,12 +1528,12 @@ private:
         }
       }
     }
-    return Json::Object{
+    return JsonObject{
         {"available", true},
         {"generation", manifest_.generation},
         {"dictionaries", std::move(dictionaries)},
         {"order",
-         Json::Object{{"term", string_array(manifest_.order.term)},
+         JsonObject{{"term", string_array(manifest_.order.term)},
                       {"frequency", string_array(manifest_.order.frequency)},
                       {"pitch", string_array(manifest_.order.pitch)}}},
         {"styles", std::move(styles)},
@@ -1933,24 +1541,35 @@ private:
   }
 
   void send_result(int64_t id, Json result) {
-    send(Json::Object{{"id", id}, {"result", std::move(result)}});
+    std::string message = stringify_json(
+        JsonObject{{"id", id}, {"result", std::move(result)}});
+    if (message.size() > kMaximumProtocolLine) {
+      send_error(id, "RESPONSE_TOO_LARGE",
+                 "dictionary backend response exceeds 8 MiB");
+      return;
+    }
+    send_serialized(std::move(message));
   }
 
   void send_error(int64_t id, std::string code, std::string message) {
-    send(Json::Object{
+    send(JsonObject{
         {"id", id},
-        {"error", Json::Object{{"code", std::move(code)},
+        {"error", JsonObject{{"code", std::move(code)},
                                {"message", std::move(message)}}},
     });
   }
 
   void send_event(std::string event, Json data) {
-    send(Json::Object{{"event", std::move(event)}, {"data", std::move(data)}});
+    send(JsonObject{{"event", std::move(event)}, {"data", std::move(data)}});
   }
 
   void send(Json message) {
+    send_serialized(stringify_json(message));
+  }
+
+  void send_serialized(std::string message) {
     std::lock_guard lock(output_mutex_);
-    std::cout << message.stringify() << '\n';
+    std::cout << message << '\n';
     std::cout.flush();
   }
 
@@ -1997,7 +1616,7 @@ private:
   std::condition_variable lookup_idle_condition_;
   std::optional<Command> pending_lookup_;
   bool lookup_active_ = false;
-  uint64_t latest_lookup_sequence_ = 0;
+  std::atomic<uint64_t> latest_lookup_sequence_ = 0;
   std::thread lookup_thread_;
 
   std::mutex admin_mutex_;

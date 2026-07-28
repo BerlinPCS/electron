@@ -209,7 +209,7 @@ def main():
             sidecar.send(request_id, "remove", {"id": item["id"]})
         removed = sidecar.send(22, "state")["result"]
         assert removed["dictionaries"] == []
-        assert any((root / ".trash").iterdir())
+        assert not any((root / ".trash").iterdir())
         sidecar.close(23)
 
         assert (root / "manifest.json").is_file()

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -64,11 +65,10 @@ interface MiningFfmpegPaths {
   imagePath: string
   audioPath: string
   wordAudioDuration?: number
+  maxOutputBytes?: number
 }
 
 class MiningMediaProcessError extends Error {
-  stage?: string
-
   constructor (
     message: string,
     readonly code: number | null,
@@ -110,7 +110,8 @@ const QUALITY: Record<MiningMediaQuality, QualityOptions> = {
 }
 
 const MAX_CAPTURE_DURATION = 30
-const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024 * 1024
+export const MAX_MINING_MEDIA_BYTES = 25 * 1024 * 1024
+const DEFAULT_MAX_OUTPUT_BYTES = MAX_MINING_MEDIA_BYTES
 
 export class MiningMediaEncoder {
   private readonly running = new Set<ChildProcess>()
@@ -158,63 +159,23 @@ export class MiningMediaEncoder {
       const paths = {
         imagePath,
         audioPath,
-        wordAudioDuration: clampDuration(wordAudioDuration)
+        wordAudioDuration: clampDuration(wordAudioDuration),
+        maxOutputBytes: this.maxOutputBytes
       }
       try {
-        await this.runStage('combined capture', this.options.ffmpegPath, buildMiningFfmpegArguments(spec, paths))
+        await this.run(this.options.ffmpegPath, buildMiningFfmpegArguments(spec, paths))
       } catch (error) {
-        if (error instanceof MiningMediaProcessError &&
-          error.signal === 'SIGSEGV' &&
-          spec.captureImage &&
-          (spec.captureAudio || spec.imageMode === 'animated')) {
-          console.warn('[mining-media] Capture crashed; retrying with an isolated image pipeline.')
-          try {
-            if (spec.imageMode === 'animated') {
-              const framePattern = join(temporaryDirectory, 'frame-%06d.png')
-              const recoveryTasks = [
-                this.runStage('frame extraction', this.options.ffmpegPath, buildMiningFrameExtractionArguments(spec, {
-                  ...paths,
-                  framePattern
-                }))
-              ]
-              if (spec.captureAudio) {
-                recoveryTasks.push(this.runStage('sentence audio', this.options.ffmpegPath, buildMiningFfmpegArguments({
-                  ...spec,
-                  captureImage: false
-                }, paths)))
-              }
-              await Promise.all(recoveryTasks)
-              await this.runStage('animation assembly', this.options.ffmpegPath, buildMiningFrameAssemblyArguments(spec, {
-                ...paths,
-                framePattern
-              }))
-            } else {
-              await this.runStage('static image', this.options.ffmpegPath, buildMiningFfmpegArguments({
-                ...spec,
-                captureAudio: false
-              }, paths))
-              await this.runStage('sentence audio', this.options.ffmpegPath, buildMiningFfmpegArguments({
-                ...spec,
-                captureImage: false
-              }, paths))
-            }
-          } catch (fallbackError) {
-            this.reportProcessFailure(fallbackError)
-            throw fallbackError
-          }
-        } else {
-          this.reportProcessFailure(error)
-          throw error
-        }
+        this.reportProcessFailure(error)
+        throw error
       }
 
-      const timestamp = this.now()
+      const identity = `${this.now()}_${randomUUID()}`
       const media: MiningEncodedMedia[] = []
       if (spec.captureImage) {
         const data = await this.readBoundedOutput(imagePath)
         media.push({
           kind: 'screenshot',
-          filename: `hayase_screenshot_${timestamp}.${imageExtension}`,
+          filename: `hayase_screenshot_${identity}.${imageExtension}`,
           mimeType: imageMimeType(imageFormat),
           data
         })
@@ -223,7 +184,7 @@ export class MiningMediaEncoder {
         const data = await this.readBoundedOutput(audioPath)
         media.push({
           kind: 'audio',
-          filename: `hayase_sentence_${timestamp}.mp3`,
+          filename: `hayase_sentence_${identity}.mp3`,
           mimeType: 'audio/mpeg',
           data
         })
@@ -273,20 +234,10 @@ export class MiningMediaEncoder {
   private reportProcessFailure (error: unknown) {
     if (error instanceof MiningMediaProcessError) {
       console.error('[mining-media] FFmpeg failed', {
-        stage: error.stage ?? 'unknown',
         code: error.code,
         signal: error.signal,
         stderr: error.diagnostic || '(no diagnostic output)'
       })
-    }
-  }
-
-  private async runStage (stage: string, executable: string, args: string[], captureStdout = false) {
-    try {
-      return await this.run(executable, args, captureStdout)
-    } catch (error) {
-      if (error instanceof MiningMediaProcessError) error.stage = stage
-      throw error
     }
   }
 
@@ -301,16 +252,27 @@ export class MiningMediaEncoder {
       let stderr = ''
       let stdout = ''
       let settled = false
+      let timeoutError: Error | undefined
+      let forceKillTimer: ReturnType<typeof setTimeout> | undefined
+      let abandonTimer: ReturnType<typeof setTimeout> | undefined
       const finish = (error?: Error) => {
         if (settled) return
         settled = true
         clearTimeout(timeout)
+        if (forceKillTimer) clearTimeout(forceKillTimer)
+        if (abandonTimer) clearTimeout(abandonTimer)
         this.running.delete(process)
         error ? reject(error) : resolve(stdout)
       }
       const timeout = setTimeout(() => {
+        timeoutError = new Error('FFmpeg media capture timed out.')
         process.kill()
-        finish(new Error('FFmpeg media capture timed out.'))
+        forceKillTimer = setTimeout(() => {
+          process.kill('SIGKILL')
+          abandonTimer = setTimeout(() => finish(timeoutError), 2_000)
+          abandonTimer.unref()
+        }, 2_000)
+        forceKillTimer.unref()
       }, this.timeoutMs)
       timeout.unref()
       process.stdout?.on('data', chunk => {
@@ -325,6 +287,10 @@ export class MiningMediaEncoder {
       })
       process.once('error', error => finish(new Error(`Could not start media encoder: ${error.message}`)))
       process.once('close', (code, signal) => {
+        if (timeoutError) {
+          finish(timeoutError)
+          return
+        }
         if (code === 0) {
           finish()
         } else {
@@ -388,6 +354,7 @@ export async function verifyMiningMediaSource (sourceUrl: string, fetchImplement
   if (response.status >= 300 && response.status < 400) {
     throw new Error('The localhost media source attempted to redirect.')
   }
+  if (!response.ok) throw new Error(`The localhost media source returned HTTP ${response.status}.`)
 }
 
 export function buildMiningFfmpegArguments (
@@ -413,7 +380,7 @@ export function buildMiningFfmpegArguments (
 
   if (spec.captureImage) {
     args.push('-map', '0:v:0', '-vf', videoFilters.join(','), '-an')
-    appendMiningImageEncoderArguments(args, spec, quality, paths.imagePath)
+    appendMiningImageEncoderArguments(args, spec, quality, paths.imagePath, paths.maxOutputBytes)
   }
 
   if (spec.captureAudio) {
@@ -425,73 +392,9 @@ export function buildMiningFfmpegArguments (
       '-ar', '48000',
       '-c:a', 'libmp3lame',
       '-b:a', `${quality.mp3Bitrate}k`,
+      '-fs', String(paths.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES),
       paths.audioPath
     )
-  }
-  return args
-}
-
-export function buildMiningFrameExtractionArguments (
-  raw: MiningCaptureSpec,
-  paths: MiningFfmpegPaths & { framePattern: string }
-) {
-  const spec = validateMiningCaptureSpec(raw)
-  if (spec.imageMode !== 'animated' || !spec.captureImage) {
-    throw new Error('Frame extraction requires animated image capture.')
-  }
-  const inputSeek = miningInputSeek(spec)
-  const relativeStart = Math.max(0, spec.start - inputSeek)
-  const relativeEnd = Math.max(relativeStart, spec.end - inputSeek)
-  const filters = buildMiningVideoFilters(spec, paths, {
-    relativeStart,
-    relativeEnd,
-    relativeCurrentTime: 0,
-    includeWordAudioHold: false
-  })
-  return [
-    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
-    ...miningInputArguments(paths.inputSource ?? spec.sourceUrl, inputSeek, true),
-    '-map', '0:v:0',
-    '-vf', filters.join(','),
-    '-an',
-    '-fps_mode', 'passthrough',
-    '-c:v', 'png',
-    '-compression_level', '3',
-    paths.framePattern
-  ]
-}
-
-export function buildMiningFrameAssemblyArguments (
-  raw: MiningCaptureSpec,
-  paths: MiningFfmpegPaths & { framePattern: string }
-) {
-  const spec = validateMiningCaptureSpec(raw)
-  if (spec.imageMode !== 'animated' || !spec.captureImage) {
-    throw new Error('Frame assembly requires animated image capture.')
-  }
-  const quality = QUALITY[spec.quality]
-  const hold = spec.syncAnimationToWordAudio ? clampDuration(paths.wordAudioDuration ?? 0) : 0
-  const args = [
-    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y'
-  ]
-  if (hold > 0) {
-    args.push(
-      '-loop', '1',
-      '-framerate', String(spec.fps),
-      '-t', decimal(hold),
-      '-i', paths.framePattern.replace('%06d', '000001')
-    )
-  }
-  args.push('-framerate', String(spec.fps), '-i', paths.framePattern)
-  const animationInput = hold > 0
-    ? '[0:v:0]setpts=PTS-STARTPTS[hold];[1:v:0]setpts=PTS-STARTPTS[main];[hold][main]concat=n=2:v=1:a=0[animation]'
-    : ''
-  if (hold > 0) {
-    args.push('-filter_complex', animationInput, '-map', '[animation]', '-an')
-    appendMiningImageEncoderArguments(args, spec, quality, paths.imagePath)
-  } else {
-    args.push('-vf', 'setpts=PTS-STARTPTS', '-an')
-    appendMiningImageEncoderArguments(args, spec, quality, paths.imagePath)
   }
   return args
 }
@@ -532,7 +435,8 @@ function appendMiningImageEncoderArguments (
   args: string[],
   spec: MiningCaptureSpec,
   quality: QualityOptions,
-  imagePath: string
+  imagePath: string,
+  maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES
 ) {
   const format = spec.imageMode === 'animated' ? spec.animatedFormat : spec.staticFormat
   if (format === 'png') {
@@ -555,7 +459,7 @@ function appendMiningImageEncoderArguments (
       ...(spec.imageMode === 'animated' ? ['-loop', '1'] : ['-frames:v', '1', '-still-picture', '1'])
     )
   }
-  args.push(imagePath)
+  args.push('-fs', String(maxOutputBytes), imagePath)
 }
 
 export function resolveMiningMediaExecutable (
@@ -590,12 +494,11 @@ function safeFilename (value: string) {
   return filename
 }
 
-function miningInputArguments (source: string, inputSeek: number, singleThreaded = false) {
+function miningInputArguments (source: string, inputSeek: number) {
   const isHttp = source.startsWith('http://') || source.startsWith('https://')
   return [
     ...(isHttp ? ['-protocol_whitelist', 'http,https,tcp,tls'] : []),
     '-ss', decimal(inputSeek),
-    ...(singleThreaded ? ['-threads', '1'] : []),
     '-i', source
   ]
 }

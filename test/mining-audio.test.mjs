@@ -10,6 +10,7 @@ import {
   LOCAL_SOURCE_TEMPLATE,
   localAudioResponse,
   MiningAudioRepository,
+  readBoundedResponseBytes,
   resolveLocalAudio
 } from '../src/main/mining-audio.ts'
 
@@ -45,7 +46,10 @@ test('resolves Yomitan JSON audio source responses', async t => {
   globalThis.fetch = async () => {
     const response = new Response(JSON.stringify({
       type: 'audioSourceList',
-      audioSources: [{ name: 'Test', url: 'https://cdn.test/word.mp3' }]
+      audioSources: [
+        { name: 'Invalid', url: 'file:///tmp/word.mp3' },
+        { name: 'Test', url: 'https://cdn.test/word.mp3' }
+      ]
     }), { headers: { 'Content-Type': 'application/json' } })
     Object.defineProperty(response, 'url', { value: 'https://source.test/audio' })
     return response
@@ -58,6 +62,20 @@ test('resolves Yomitan JSON audio source responses', async t => {
     ),
     'https://cdn.test/word.mp3'
   )
+})
+
+test('stops reading oversized remote responses without buffering the full body', async () => {
+  const declaredOversize = new Response('small', { headers: { 'Content-Length': '100' } })
+  assert.equal(await readBoundedResponseBytes(declaredOversize, 10), undefined)
+
+  const streamedOversize = new Response(new ReadableStream({
+    start (controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]))
+      controller.enqueue(new Uint8Array([4, 5, 6]))
+      controller.close()
+    }
+  }))
+  assert.equal(await readBoundedResponseBytes(streamedOversize, 5), undefined)
 })
 
 test('imports Android audio databases, orders providers, resolves, and reads blobs', async t => {

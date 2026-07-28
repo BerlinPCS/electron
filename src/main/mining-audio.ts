@@ -1,6 +1,9 @@
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+
+import createMiningAudioWorker from './mining-audio-worker.ts?nodeWorker'
+
+import type { Worker } from 'node:worker_threads'
 
 const LOCAL_SOURCE_TEMPLATE = 'hayase-local-audio-source://get/?term={term}&reading={reading}'
 const SOURCE_PRIORITY = [
@@ -39,10 +42,16 @@ interface LocalAudioConfig {
   sourceOrder: string[]
 }
 
+interface PendingDatabaseRequest {
+  resolve: (value: unknown) => void
+  reject: (error: Error) => void
+}
+
 export class MiningAudioRepository {
   private readonly databasePath: string
   private readonly configPath: string
   private cachedState?: MiningLocalAudioState
+  private readonly database = new MiningAudioDatabaseWorker()
 
   constructor (private readonly root: string) {
     this.databasePath = join(root, 'android.db')
@@ -52,8 +61,10 @@ export class MiningAudioRepository {
   async state (): Promise<MiningLocalAudioState> {
     if (this.cachedState) return cloneState(this.cachedState)
     try {
+      await recoverFileBackup(this.databasePath)
       const file = await stat(this.databasePath)
-      const sources = this.readSources(this.databasePath)
+      const rows = await this.database.request<Array<{ source?: unknown }>>('sources', this.databasePath)
+      const sources = defaultSourceOrder(rows.flatMap(row => typeof row.source === 'string' ? [row.source] : []))
       const sourceOrder = await this.repairSourceOrder(sources)
       this.cachedState = {
         available: true,
@@ -81,9 +92,8 @@ export class MiningAudioRepository {
     await rm(temporaryPath, { force: true })
     try {
       await copyFile(sourcePath, temporaryPath)
-      this.validateDatabase(temporaryPath)
-      await rm(this.databasePath, { force: true })
-      await rename(temporaryPath, this.databasePath)
+      await this.database.request('validate', temporaryPath)
+      await replaceFile(temporaryPath, this.databasePath)
       await rm(this.configPath, { force: true })
       this.cachedState = undefined
       return await this.state()
@@ -95,7 +105,9 @@ export class MiningAudioRepository {
 
   async removeDatabase (): Promise<MiningLocalAudioState> {
     await rm(this.databasePath, { force: true })
+    await rm(`${this.databasePath}.backup`, { force: true })
     await rm(this.configPath, { force: true })
+    await rm(`${this.configPath}.backup`, { force: true })
     this.cachedState = emptyLocalAudioState()
     return cloneState(this.cachedState)
   }
@@ -136,33 +148,30 @@ export class MiningAudioRepository {
     if (!response.ok) return null
     const finalProtocol = new URL(response.url).protocol
     if (finalProtocol !== 'http:' && finalProtocol !== 'https:') return null
-    const declaredLength = Number(response.headers.get('content-length') ?? 0)
-    if (declaredLength > MAX_REMOTE_SOURCE_BYTES) return null
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    if (bytes.byteLength > MAX_REMOTE_SOURCE_BYTES) return null
+    const bytes = await readBoundedResponseBytes(response, MAX_REMOTE_SOURCE_BYTES)
+    if (!bytes) return null
 
     const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown
     if (!isRecord(payload) || payload.type !== 'audioSourceList' || !Array.isArray(payload.audioSources)) return null
-    const first = payload.audioSources[0]
-    if (!isRecord(first) || typeof first.url !== 'string') return null
-    const audioUrl = new URL(first.url)
-    return audioUrl.protocol === 'http:' || audioUrl.protocol === 'https:' ? audioUrl.href : null
+    for (const candidate of payload.audioSources) {
+      if (!isRecord(candidate) || typeof candidate.url !== 'string') continue
+      try {
+        const audioUrl = new URL(candidate.url)
+        if (audioUrl.protocol === 'http:' || audioUrl.protocol === 'https:') return audioUrl.href
+      } catch {}
+    }
+    return null
   }
 
   async loadLocalAudio (source: string, file: string): Promise<Buffer | null> {
     if (!source || source.length > 1024 || !file || file.length > 4096 || !isSupportedAudioFile(file)) return null
-    let database: DatabaseSync | undefined
     try {
-      database = new DatabaseSync(this.databasePath, { readOnly: true })
-      const row = database.prepare(
-        'SELECT data FROM android WHERE source = ? AND file = ? LIMIT 1'
-      ).get(source, file) as { data?: Uint8Array } | undefined
-      if (!(row?.data instanceof Uint8Array) || row.data.byteLength > MAX_LOCAL_AUDIO_BYTES) return null
-      return Buffer.from(row.data)
+      const data = await this.database.request<Uint8Array | undefined>(
+        'audio', this.databasePath, source, file, MAX_LOCAL_AUDIO_BYTES
+      )
+      return data ? Buffer.from(data) : null
     } catch {
       return null
-    } finally {
-      database?.close()
     }
   }
 
@@ -171,58 +180,20 @@ export class MiningAudioRepository {
     const state = await this.state()
     if (!state.available) return null
 
-    let database: DatabaseSync | undefined
     try {
-      database = new DatabaseSync(this.databasePath, { readOnly: true })
-      const rows = (normalizedReading
-        ? database.prepare(
-          'SELECT source, expression, reading, file FROM entries WHERE expression = ? OR reading = ?'
-        ).all(term, normalizedReading)
-        : database.prepare(
-          'SELECT source, expression, reading, file FROM entries WHERE expression = ?'
-        ).all(term)) as unknown as LocalAudioRow[]
+      const rows = await this.database.request<LocalAudioRow[]>(
+        'find', this.databasePath, term, normalizedReading
+      )
       return resolveLocalAudio(term, normalizedReading, rows, state.sourceOrder)
     } catch {
       return null
-    } finally {
-      database?.close()
-    }
-  }
-
-  private validateDatabase (path: string) {
-    let database: DatabaseSync | undefined
-    try {
-      database = new DatabaseSync(path, { readOnly: true })
-      const entries = tableColumns(database, 'entries')
-      const audio = tableColumns(database, 'android')
-      for (const column of ['source', 'expression', 'reading', 'file']) {
-        if (!entries.has(column)) throw new Error(`android.db entries table is missing ${column}`)
-      }
-      for (const column of ['source', 'file', 'data']) {
-        if (!audio.has(column)) throw new Error(`android.db android table is missing ${column}`)
-      }
-    } finally {
-      database?.close()
-    }
-  }
-
-  private readSources (path: string): string[] {
-    let database: DatabaseSync | undefined
-    try {
-      database = new DatabaseSync(path, { readOnly: true })
-      const rows = database.prepare(
-        `SELECT DISTINCT source FROM entries
-         WHERE lower(file) LIKE '%.mp3' OR lower(file) LIKE '%.opus' OR lower(file) LIKE '%.ogg'`
-      ).all() as Array<{ source?: unknown }>
-      return defaultSourceOrder(rows.flatMap(row => typeof row.source === 'string' ? [row.source] : []))
-    } finally {
-      database?.close()
     }
   }
 
   private async repairSourceOrder (sources: string[]) {
     let current: string[] = []
     try {
+      await recoverFileBackup(this.configPath)
       const value = JSON.parse(await readFile(this.configPath, 'utf8')) as unknown
       if (isRecord(value) && value.version === 1 && Array.isArray(value.sourceOrder)) {
         current = value.sourceOrder.filter((source): source is string => typeof source === 'string')
@@ -239,8 +210,7 @@ export class MiningAudioRepository {
     await mkdir(this.root, { recursive: true })
     const temporaryPath = `${this.configPath}.tmp`
     await writeFile(temporaryPath, JSON.stringify(config), 'utf8')
-    await rm(this.configPath, { force: true })
-    await rename(temporaryPath, this.configPath)
+    await replaceFile(temporaryPath, this.configPath)
   }
 }
 
@@ -346,13 +316,6 @@ function isSupportedAudioFile (file: string) {
   return SUPPORTED_EXTENSIONS.has(file.split('.').pop()?.toLowerCase() ?? '')
 }
 
-function tableColumns (database: DatabaseSync, table: string) {
-  return new Set(
-    (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>)
-      .flatMap(row => typeof row.name === 'string' ? [row.name] : [])
-  )
-}
-
 function emptyLocalAudioState (): MiningLocalAudioState {
   return { available: false, sizeBytes: 0, sources: [], sourceOrder: [] }
 }
@@ -378,3 +341,111 @@ function escapeRegExp (value: string) {
 }
 
 export { LOCAL_SOURCE_TEMPLATE }
+
+export async function readBoundedResponseBytes (response: Response, maximumBytes: number) {
+  const declaredLength = Number(response.headers.get('content-length') ?? 0)
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return bytes.byteLength <= maximumBytes ? bytes : undefined
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maximumBytes) {
+        await reader.cancel()
+        return
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
+async function replaceFile (temporaryPath: string, destinationPath: string) {
+  const backupPath = `${destinationPath}.backup`
+  await recoverFileBackup(destinationPath)
+  await rm(backupPath, { force: true })
+  let backedUp = false
+  try {
+    await rename(destinationPath, backupPath)
+    backedUp = true
+  } catch (error) {
+    if (!isMissingFile(error)) throw error
+  }
+  try {
+    await rename(temporaryPath, destinationPath)
+  } catch (error) {
+    if (backedUp) await rename(backupPath, destinationPath)
+    throw error
+  }
+  if (backedUp) await rm(backupPath, { force: true })
+}
+
+async function recoverFileBackup (destinationPath: string) {
+  try {
+    await stat(destinationPath)
+    return
+  } catch (error) {
+    if (!isMissingFile(error)) throw error
+  }
+  try {
+    await rename(`${destinationPath}.backup`, destinationPath)
+  } catch (error) {
+    if (!isMissingFile(error)) throw error
+  }
+}
+
+class MiningAudioDatabaseWorker {
+  private worker?: Worker
+  private nextId = 1
+  private readonly pending = new Map<number, PendingDatabaseRequest>()
+
+  request<T> (operation: 'validate' | 'sources' | 'find' | 'audio', path: string, ...args: unknown[]) {
+    const worker = this.getWorker()
+    const id = this.nextId++
+    if (!this.pending.size) worker.ref()
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: value => resolve(value as T), reject })
+      worker.postMessage({ id, operation, path, args })
+    })
+  }
+
+  private getWorker () {
+    if (this.worker) return this.worker
+    const worker = createMiningAudioWorker({})
+    worker.unref()
+    worker.on('message', (message: { id: number, result?: unknown, error?: string }) => {
+      const pending = this.pending.get(message.id)
+      if (!pending) return
+      this.pending.delete(message.id)
+      if (message.error) pending.reject(new Error(message.error))
+      else pending.resolve(message.result)
+      if (!this.pending.size) worker.unref()
+    })
+    const fail = (error: Error) => {
+      for (const pending of this.pending.values()) pending.reject(error)
+      this.pending.clear()
+      if (this.worker === worker) this.worker = undefined
+    }
+    worker.on('error', fail)
+    worker.on('exit', code => {
+      if (code !== 0) fail(new Error(`Mining audio worker exited with code ${code}.`))
+    })
+    this.worker = worker
+    return worker
+  }
+}

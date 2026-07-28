@@ -1,10 +1,12 @@
 import { Buffer } from 'node:buffer'
-import { basename } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { basename, extname } from 'node:path'
 
 import { isCanonicalBase64 } from './base64.ts'
 import {
   type MiningCaptureSpec,
   type MiningEncodedMedia,
+  MAX_MINING_MEDIA_BYTES,
   type MiningMediaEncoder,
   validateMiningCaptureSpec
 } from './mining-media.ts'
@@ -93,7 +95,7 @@ export type MiningAnkiDuplicateResult =
   | { status: 'error', message: string }
 
 export type MiningAnkiAddResult =
-  | { status: 'success', noteId?: number }
+  | { status: 'success', noteId?: number, warning?: string }
   | { status: 'duplicate' }
   | { status: 'error', message: string }
 
@@ -259,6 +261,10 @@ export class AnkiConnectClient {
       mimeType: media.mimeType,
       data: Buffer.from(media.data).toString('base64')
     })
+  }
+
+  async deleteMedia (filename: string): Promise<void> {
+    await this.request<unknown>('deleteMediaFile', { filename })
   }
 
   checkNote (note: AnkiConnectNote) {
@@ -445,6 +451,9 @@ export class MiningAnkiService {
   async addNote (request: MiningAnkiAddRequest): Promise<MiningAnkiAddResult> {
     const startedAt = performance.now()
     const timings: Record<string, number> = {}
+    const storedMedia: string[] = []
+    let client: AnkiConnectClient | undefined
+    let noteAdded = false
     try {
       const validated = validateAddRequest(request)
       await this.requireReachable()
@@ -458,7 +467,8 @@ export class MiningAnkiService {
       if (!Object.keys(fields).length) throw new Error('No fields are mapped for the selected Anki note type.')
 
       const note = this.note(settings, fields)
-      if (!settings.allowDuplicates && !parseCanAdd(await this.client().checkNote(note))) {
+      client = this.client()
+      if (!settings.allowDuplicates && !parseCanAdd(await client.checkNote(note))) {
         timings.duplicateCheck = elapsed(startedAt)
         timings.total = timings.duplicateCheck
         console.debug('[mining-anki] timings', timings)
@@ -467,23 +477,33 @@ export class MiningAnkiService {
       }
       timings.duplicateCheck = elapsed(startedAt)
 
-      const replacements = await this.storeRequestMedia(validated, note.fields, timings)
+      const replacements = await this.storeRequestMedia(validated, note.fields, client, storedMedia, timings)
       note.fields = Object.fromEntries(Object.entries(note.fields).map(([field, value]) => [
         field,
         replaceMediaReferences(value, replacements)
       ]))
       const addStartedAt = performance.now()
-      const noteId = await this.client().addNote(note)
+      const noteId = await client.addNote(note)
       timings.addNote = elapsed(addStartedAt)
       if (typeof noteId !== 'number' || !Number.isSafeInteger(noteId)) {
         throw new Error('AnkiConnect did not return a valid note ID.')
       }
-      if (settings.forceSync) await this.client().sync()
-      this.setConnectionState('connected')
+      noteAdded = true
+      let warning: string | undefined
+      if (settings.forceSync) {
+        try {
+          await client.sync()
+        } catch (error) {
+          warning = `The note was added, but Anki sync failed: ${errorMessage(error)}`
+          this.recordOperationFailure(error)
+        }
+      }
+      if (!warning) this.setConnectionState('connected')
       timings.total = elapsed(startedAt)
       console.debug('[mining-anki] timings', timings)
-      return { status: 'success', noteId }
+      return { status: 'success', noteId, ...(warning ? { warning } : {}) }
     } catch (error) {
+      if (!noteAdded && client && storedMedia.length) await this.removeStoredMedia(client, storedMedia)
       timings.total = elapsed(startedAt)
       console.debug('[mining-anki] timings', timings)
       this.recordOperationFailure(error)
@@ -579,9 +599,10 @@ export class MiningAnkiService {
   private async storeRequestMedia (
     request: MiningAnkiAddRequest,
     fields: Record<string, string>,
+    client: AnkiConnectClient,
+    storedMedia: string[],
     timings: Record<string, number> = {}
   ) {
-    const client = this.client()
     const replacements = new Map<string, string>()
     const renderedFields = Object.values(fields).join('\n')
     const wordAudioSource = request.payload.audio
@@ -593,19 +614,8 @@ export class MiningAnkiService {
         return media
       })
       : Promise.resolve(undefined)
-    const dictionaryPromise = Promise.all((request.payload.dictionaryMedia ?? [])
+    const dictionaryDescriptors = (request.payload.dictionaryMedia ?? [])
       .filter(descriptor => renderedFields.includes(descriptor.filename))
-      .map(async descriptor => {
-        if (!this.mediaLoaders.loadDictionaryMedia) throw new Error('Dictionary media loading is unavailable.')
-        return {
-          descriptor,
-          media: {
-            filename: descriptor.filename,
-            mimeType: mediaMimeType(descriptor.filename),
-            data: await this.mediaLoaders.loadDictionaryMedia(descriptor.dictionary, descriptor.path)
-          } satisfies MiningAnkiHostMedia
-        }
-      }))
 
     let wordAudio: MiningAnkiHostMedia | undefined
     let wordAudioDuration = 0
@@ -625,45 +635,57 @@ export class MiningAnkiService {
         timings.mediaEncode = elapsed(encodeStartedAt)
       })
       : Promise.resolve([] as MiningEncodedMedia[])
-    const [encoded, resolvedWordAudio, dictionaries] = await Promise.all([
+    const [encoded, resolvedWordAudio] = await Promise.all([
       encodedPromise,
-      wordAudio ? Promise.resolve(wordAudio) : wordPromise,
-      dictionaryPromise
+      wordAudio ? Promise.resolve(wordAudio) : wordPromise
     ])
     wordAudio = resolvedWordAudio
 
     const storageStartedAt = performance.now()
-    const storeJobs: Array<Promise<Array<[string, string]>>> = []
+    const store = async (media: MiningAnkiMedia | MiningAnkiHostMedia) => {
+      const filename = uniqueAnkiMediaFilename(media.filename)
+      const stored = isSerializedMiningMedia(media)
+        ? await client.storeMedia({ ...media, filename })
+        : await client.storeMediaBytes({ ...media, filename })
+      storedMedia.push(stored)
+      return stored
+    }
     for (const item of request.context.media ?? []) {
       const placeholder = item.kind === 'audio' ? '{sentence-audio}' : `{${item.kind}}`
       if (!renderedFields.includes(placeholder)) continue
-      storeJobs.push(client.storeMedia(item).then(stored => [[
-        item.filename,
-        mediaTag(item.mimeType, stored)
-      ], [placeholder, mediaTag(item.mimeType, stored)]]))
+      const stored = await store(item)
+      replacements.set(item.filename, mediaTag(item.mimeType, stored))
+      replacements.set(placeholder, mediaTag(item.mimeType, stored))
     }
     for (const item of encoded) {
       const placeholder = item.kind === 'audio' ? '{sentence-audio}' : '{screenshot}'
       if (!renderedFields.includes(placeholder)) continue
-      storeJobs.push(client.storeMediaBytes(item).then(stored => [[
-        item.filename,
-        mediaTag(item.mimeType, stored)
-      ], [placeholder, mediaTag(item.mimeType, stored)]]))
+      const stored = await store(item)
+      replacements.set(item.filename, mediaTag(item.mimeType, stored))
+      replacements.set(placeholder, mediaTag(item.mimeType, stored))
     }
     if (needsWordAudio && wordAudio) {
-      storeJobs.push(client.storeMediaBytes(wordAudio).then(stored => [['{audio}', `[sound:${stored}]`]]))
+      replacements.set('{audio}', `[sound:${await store(wordAudio)}]`)
     }
-    for (const { descriptor, media } of dictionaries) {
-      storeJobs.push(client.storeMediaBytes(media).then(stored => [[
+    for (const descriptor of dictionaryDescriptors) {
+      if (!this.mediaLoaders.loadDictionaryMedia) throw new Error('Dictionary media loading is unavailable.')
+      const media = {
+        filename: descriptor.filename,
+        mimeType: mediaMimeType(descriptor.filename),
+        data: await this.mediaLoaders.loadDictionaryMedia(descriptor.dictionary, descriptor.path)
+      }
+      const stored = await store(media)
+      replacements.set(
         descriptor.filename,
         media.mimeType.startsWith('image/') ? `<img src="${escapeHtmlAttribute(stored)}">` : stored
-      ]]))
-    }
-    for (const entries of await Promise.all(storeJobs)) {
-      for (const [reference, tag] of entries) replacements.set(reference, tag)
+      )
     }
     timings.mediaStorage = elapsed(storageStartedAt)
     return replacements
+  }
+
+  private async removeStoredMedia (client: AnkiConnectClient, filenames: string[]) {
+    await Promise.allSettled(filenames.map(filename => client.deleteMedia(filename)))
   }
 
   private async loadWordAudio (source: string) {
@@ -742,7 +764,11 @@ export function parseCanAdd (value: unknown): boolean {
   if (!Array.isArray(value) || value.length !== 1 || !isRecord(value[0]) || typeof value[0].canAdd !== 'boolean') {
     throw new Error('AnkiConnect returned an invalid duplicate-check response.')
   }
-  return value[0].canAdd
+  const result = value[0]
+  if (!result.canAdd && typeof result.error === 'string' && result.error && !/duplicate/i.test(result.error)) {
+    throw new Error(result.error)
+  }
+  return result.canAdd as boolean
 }
 
 function sanitizeSettings (value: unknown): MiningAnkiSettings {
@@ -833,8 +859,14 @@ function validateMedia (media: MiningAnkiMedia): MiningAnkiMedia {
     throw new Error('Mining media must contain base64-encoded bytes.')
   }
   const decoded = Buffer.from(data, 'base64')
-  if (decoded.byteLength > 100 * 1024 * 1024) throw new Error('Mining media exceeds 100 MiB.')
+  if (decoded.byteLength > MAX_MINING_MEDIA_BYTES) throw new Error('Mining media exceeds 25 MiB.')
   return { kind: media.kind, filename, mimeType, data }
+}
+
+function isSerializedMiningMedia (
+  media: MiningAnkiMedia | MiningAnkiHostMedia
+): media is MiningAnkiMedia {
+  return typeof media.data === 'string'
 }
 
 function validateMappings (value: unknown) {
@@ -883,14 +915,14 @@ function templateValues (request: MiningAnkiAddRequest) {
       request.context.sentenceOffset
     ),
     'popup-selection-text': typeof payload.popupSelectionText === 'string'
-      ? payload.popupSelectionText
-      : request.context.selectedText,
-    'selected-text': request.context.selectedText,
-    'document-title': request.context.title,
-    title: request.context.title,
+      ? escapeHtml(payload.popupSelectionText)
+      : escapeHtml(request.context.selectedText),
+    'selected-text': escapeHtml(request.context.selectedText),
+    'document-title': escapeHtml(request.context.title),
+    title: escapeHtml(request.context.title),
     timestamp: formatTimestamp(request.context.timestamp),
     'timestamp-seconds': String(request.context.timestamp),
-    'furigana-plain': typeof payload.furiganaPlain === 'string' ? payload.furiganaPlain : '',
+    'furigana-plain': typeof payload.furiganaPlain === 'string' ? escapeHtml(payload.furiganaPlain) : '',
     frequencies: typeof payload.frequenciesHtml === 'string' ? payload.frequenciesHtml : '',
     'frequency-harmonic-rank': typeof payload.freqHarmonicRank === 'string' ? payload.freqHarmonicRank : '',
     'glossary-first': typeof payload.glossaryFirst === 'string' ? payload.glossaryFirst : '',
@@ -900,21 +932,21 @@ function templateValues (request: MiningAnkiAddRequest) {
   }
   for (const [key, value] of Object.entries(request.payload)) {
     if (key !== 'audio' && key !== 'dictionaryMedia' && ['string', 'number', 'boolean'].includes(typeof value)) {
-      values[key] = String(value)
+      values[key] = richTemplateValue(key) ? String(value) : escapeHtml(String(value))
     }
   }
   return values
 }
 
 function highlightedSentence (sentence: string, matched: string, offset?: number) {
-  if (!matched) return sentence
+  if (!matched) return escapeHtml(sentence)
   if (offset != null && sentence.slice(offset, offset + matched.length) === matched) {
-    return sentence.slice(0, offset) + `<b>${matched}</b>` + sentence.slice(offset + matched.length)
+    return escapeHtml(sentence.slice(0, offset)) + `<b>${escapeHtml(matched)}</b>` + escapeHtml(sentence.slice(offset + matched.length))
   }
   const index = sentence.indexOf(matched)
   return index < 0
-    ? sentence
-    : sentence.slice(0, index) + `<b>${matched}</b>` + sentence.slice(index + matched.length)
+    ? escapeHtml(sentence)
+    : escapeHtml(sentence.slice(0, index)) + `<b>${escapeHtml(matched)}</b>` + escapeHtml(sentence.slice(index + matched.length))
 }
 
 function formatTimestamp (seconds: number) {
@@ -951,6 +983,31 @@ function escapeHtmlAttribute (value: string) {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+function escapeHtml (value: string) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+const RICH_TEMPLATE_VALUES = new Set([
+  'frequenciesHtml',
+  'glossary',
+  'glossaryFirst',
+  'singleGlossaries',
+  'pitchPositions',
+  'pitchCategories',
+  'phoneticTranscriptions'
+])
+
+function richTemplateValue (key: string) {
+  return RICH_TEMPLATE_VALUES.has(key)
+}
+
+function uniqueAnkiMediaFilename (filename: string) {
+  const normalized = basename(filename)
+  const extension = extname(normalized)
+  const stem = normalized.slice(0, Math.max(0, normalized.length - extension.length)) || 'hayase_media'
+  return `${stem}_${randomUUID()}${extension}`
+}
+
 function mediaTag (mimeType: string, stored: string) {
   return mimeType.startsWith('audio/')
     ? `[sound:${stored}]`
@@ -978,7 +1035,7 @@ function isConnectionError (error: unknown) {
 }
 
 function offlineRetryDelay (attempt: number) {
-  return [2_000, 5_000, 10_000, 30_000][Math.min(attempt, 3)]!
+  return [2_000, 5_000, 10_000, 30_000][Math.min(attempt, 3)] ?? 30_000
 }
 
 function validateDictionaryMedia (value: unknown) {

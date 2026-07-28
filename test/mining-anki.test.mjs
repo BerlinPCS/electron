@@ -295,10 +295,10 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
   assert.match(note.fields.Back, /食\[た]べる/)
   assert.match(note.fields.Back, /<ol><li>100<\/li><\/ol>/)
   assert.match(note.fields.Back, /00:00:12\.500/)
-  assert.equal(note.fields.WordAudio, '[sound:word.opus]')
-  assert.equal(note.fields.SentenceAudio, '[sound:sentence.wav]')
-  assert.match(note.fields.Back, /<img src="shot\.png">/)
-  assert.match(note.fields.Back, /<img src="dict\.png">/)
+  assert.match(note.fields.WordAudio, /^\[sound:word_[0-9a-f-]+\.opus\]$/)
+  assert.match(note.fields.SentenceAudio, /^\[sound:sentence_[0-9a-f-]+\.wav\]$/)
+  assert.match(note.fields.Back, /<img src="shot_[0-9a-f-]+\.png">/)
+  assert.match(note.fields.Back, /<img src="dict_[0-9a-f-]+\.png">/)
   assert.equal(requests.at(-1).action, 'sync')
 })
 
@@ -383,11 +383,100 @@ test('native capture probes word audio, encodes generated media, and preserves o
   const stored = requests.filter(request => request.action === 'storeMediaFile')
     .map(request => request.params.filename)
     .sort((a, b) => a.localeCompare(b))
-  assert.deepEqual(stored, ['sentence.mp3', 'shot.webp', 'word.opus'])
+  assert.equal(stored.length, 3)
+  assert.equal(stored.some(filename => /^sentence_[0-9a-f-]+\.mp3$/.test(filename)), true)
+  assert.equal(stored.some(filename => /^shot_[0-9a-f-]+\.webp$/.test(filename)), true)
+  assert.equal(stored.some(filename => /^word_[0-9a-f-]+\.opus$/.test(filename)), true)
   const note = requests.find(request => request.action === 'addNote').params.note
-  assert.equal(note.fields.WordAudio, '[sound:word.opus]')
-  assert.equal(note.fields.SentenceAudio, '[sound:sentence.mp3]')
-  assert.equal(note.fields.Picture, '<img src="shot.webp">')
+  assert.match(note.fields.WordAudio, /^\[sound:word_[0-9a-f-]+\.opus\]$/)
+  assert.match(note.fields.SentenceAudio, /^\[sound:sentence_[0-9a-f-]+\.mp3\]$/)
+  assert.match(note.fields.Picture, /^<img src="shot_[0-9a-f-]+\.webp">$/)
+})
+
+test('removes newly stored media when adding the note fails', async () => {
+  const settings = {
+    ...structuredClone(DEFAULT_MINING_ANKI_SETTINGS),
+    deckName: 'Mining',
+    modelName: 'Basic',
+    fieldMappings: { Front: '{expression}', Picture: '{screenshot}' }
+  }
+  const requests = []
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: () => {}
+  }, async (_url, init) => {
+    const request = JSON.parse(init.body)
+    requests.push(request)
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front', 'Picture']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
+    if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
+    if (request.action === 'storeMediaFile') return jsonResponse(request.params.filename)
+    if (request.action === 'addNote') return jsonResponse(null, 'add failed')
+    if (request.action === 'deleteMediaFile') return jsonResponse(null)
+    throw new Error(`unexpected action: ${request.action}`)
+  })
+
+  const result = await service.addNote({
+    payload: { expression: '猫' },
+    context: {
+      sentence: '猫',
+      selectedText: '猫',
+      title: 'Video',
+      timestamp: 1,
+      media: [{ kind: 'screenshot', filename: 'shot.png', mimeType: 'image/png', data: 'AQ==' }]
+    }
+  })
+
+  assert.deepEqual(result, { status: 'error', message: 'add failed' })
+  const stored = requests.find(request => request.action === 'storeMediaFile').params.filename
+  assert.match(stored, /^shot_[0-9a-f-]+\.png$/)
+  assert.equal(requests.find(request => request.action === 'deleteMediaFile').params.filename, stored)
+})
+
+test('reports sync failure as a warning after a note was added', async () => {
+  const settings = {
+    ...structuredClone(DEFAULT_MINING_ANKI_SETTINGS),
+    deckName: 'Mining',
+    modelName: 'Basic',
+    forceSync: true,
+    fieldMappings: { Front: '{expression}' }
+  }
+  const requests = []
+  const service = new MiningAnkiService({
+    read: () => settings,
+    write: () => {}
+  }, async (_url, init) => {
+    const request = JSON.parse(init.body)
+    requests.push(request)
+    if (request.action === 'multi') {
+      return jsonMultiResponse(request, action => {
+        if (action.action === 'deckNames') return ['Mining']
+        if (action.action === 'modelNames') return ['Basic']
+        if (action.action === 'modelFieldNames') return ['Front']
+        throw new Error(`unexpected action: ${action.action}`)
+      })
+    }
+    if (request.action === 'canAddNotesWithErrorDetail') return jsonResponse([{ canAdd: true }])
+    if (request.action === 'addNote') return jsonResponse(99)
+    if (request.action === 'sync') return jsonResponse(null, 'sync is offline')
+    throw new Error(`unexpected action: ${request.action}`)
+  })
+
+  const result = await service.addNote({
+    payload: { expression: '猫' },
+    context: { sentence: '猫', selectedText: '猫', title: 'Video', timestamp: 1, media: [] }
+  })
+
+  assert.equal(result.status, 'success')
+  assert.equal(result.noteId, 99)
+  assert.match(result.warning, /note was added.*sync is offline/i)
+  assert.equal(requests.some(request => request.action === 'deleteMediaFile'), false)
 })
 
 test('duplicate rejection happens before native media encoding', async () => {
@@ -534,6 +623,8 @@ test('show notes respects its setting without contacting AnkiConnect', async () 
 
 test('duplicate and malformed responses remain explicit', async () => {
   assert.equal(parseCanAdd([{ canAdd: true }]), true)
+  assert.equal(parseCanAdd([{ canAdd: false, error: 'duplicate' }]), false)
+  assert.throws(() => parseCanAdd([{ canAdd: false, error: 'model was not found' }]), /model was not found/)
   assert.throws(() => parseCanAdd([{ allowed: true }]), /invalid duplicate-check/)
   const client = new AnkiConnectClient('http://127.0.0.1:8765', '', async () => jsonResponse(null, 'boom'))
   await assert.rejects(client.ping(), /boom/)

@@ -20,8 +20,8 @@ import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/
 // import Protocol from './protocol.ts'
 import IPC from './ipc.ts'
 import { mediaMimeType, MiningAnkiService } from './mining-anki.ts'
-import { localAudioResponse, MiningAudioRepository } from './mining-audio.ts'
-import { MiningMediaEncoder, resolveMiningMediaExecutable } from './mining-media.ts'
+import { localAudioResponse, MiningAudioRepository, readBoundedResponseBytes } from './mining-audio.ts'
+import { MAX_MINING_MEDIA_BYTES, MiningMediaEncoder, resolveMiningMediaExecutable } from './mining-media.ts'
 import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
 import store from './store.ts'
@@ -152,8 +152,8 @@ export default class App {
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported word audio URL.')
       const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
       if (!response.ok) throw new Error(`Word audio returned HTTP ${response.status}.`)
-      const data = new Uint8Array(await response.arrayBuffer())
-      if (data.byteLength > 100 * 1024 * 1024) throw new Error('Word audio exceeds 100 MiB.')
+      const data = await readBoundedResponseBytes(response, MAX_MINING_MEDIA_BYTES)
+      if (!data) throw new Error('Word audio exceeds 25 MiB.')
       const candidateFilename = url.pathname.split('/').pop()
       const filename = candidateFilename ?? 'hoshi_audio.mp3'
       return {

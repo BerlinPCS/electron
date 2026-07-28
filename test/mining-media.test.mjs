@@ -4,8 +4,6 @@ import test from 'node:test'
 
 import {
   buildMiningFfmpegArguments,
-  buildMiningFrameAssemblyArguments,
-  buildMiningFrameExtractionArguments,
   MiningMediaEncoder,
   resolveMiningMediaExecutable,
   validateMiningCaptureSpec,
@@ -51,6 +49,7 @@ test('builds balanced static WebP and mono MP3 outputs from the selected times a
   assert.ok(args.includes('libmp3lame'))
   assert.ok(args.includes('96k'))
   assert.ok(args.includes('48000'))
+  assert.equal(args.filter(value => value === '-fs').length, 2)
   assert.ok(args.includes('/tmp/capture.webp'))
   assert.ok(args.includes('/tmp/sentence.mp3'))
 })
@@ -124,9 +123,13 @@ test('checks localhost media without allowing redirects', async () => {
     })),
     /redirect/
   )
+  await assert.rejects(
+    verifyMiningMediaSource(base.sourceUrl, async () => new Response(null, { status: 404 })),
+    /HTTP 404/
+  )
 })
 
-test('isolates animated frame extraction, assembly, and audio after an FFmpeg segfault', async () => {
+test('does not retry combined capture after an FFmpeg failure', async () => {
   const calls = []
   const spawnImplementation = (_executable, args) => {
     calls.push(args)
@@ -134,8 +137,7 @@ test('isolates animated frame extraction, assembly, and audio after an FFmpeg se
     child.stderr = new EventEmitter()
     child.kill = () => true
     queueMicrotask(() => {
-      if (calls.length === 1) child.emit('close', null, 'SIGSEGV')
-      else child.emit('close', 0, null)
+      child.emit('close', null, 'SIGSEGV')
     })
     return child
   }
@@ -149,37 +151,10 @@ test('isolates animated frame extraction, assembly, and audio after an FFmpeg se
   await assert.rejects(encoder.encode({
     ...base,
     imageMode: 'animated'
-  }), /ENOENT/)
-  assert.equal(calls.length, 4)
+  }), /FFmpeg media capture failed/)
+  assert.equal(calls.length, 1)
   assert.ok(calls[0].some(value => value.endsWith('.webp')))
   assert.ok(calls[0].some(value => value.endsWith('.mp3')))
-  assert.ok(calls[1].some(value => value.includes('frame-%06d.png')))
-  assert.equal(calls[1].includes('libwebp_anim'), false)
-  assert.ok(calls[2].some(value => value.endsWith('.mp3')))
-  assert.equal(calls[2].some(value => value.endsWith('.webp')), false)
-  assert.ok(calls[3].some(value => value.includes('frame-%06d.png')))
-  assert.ok(calls[3].some(value => value.endsWith('.webp')))
-  assert.ok(calls[3].includes('libwebp_anim'))
-})
-
-test('isolated animated capture applies the word-audio hold only during assembly', () => {
-  const animated = {
-    ...base,
-    imageMode: 'animated',
-    syncAnimationToWordAudio: true
-  }
-  const isolatedPaths = {
-    ...paths,
-    framePattern: '/tmp/frame-%06d.png',
-    wordAudioDuration: 0.825
-  }
-  const extraction = buildMiningFrameExtractionArguments(animated, isolatedPaths)
-  const assembly = buildMiningFrameAssemblyArguments(animated, isolatedPaths)
-  assert.equal(extraction.some(value => value.includes('tpad=')), false)
-  assert.ok(extraction.includes('png'))
-  assert.equal(assembly[assembly.indexOf('-t') + 1], '0.825')
-  assert.ok(assembly.some(value => value.includes('concat=n=2:v=1:a=0')))
-  assert.ok(assembly.includes('libwebp_anim'))
 })
 
 test('resolves development and packaged sidecar paths without system fallback', () => {
