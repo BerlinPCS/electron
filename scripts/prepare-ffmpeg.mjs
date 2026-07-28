@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, openAsBlob } from 'node:fs'
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { createReadStream, createWriteStream, existsSync, openAsBlob } from 'node:fs'
+import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
@@ -26,11 +26,6 @@ const BUILDS = {
       url: 'https://ffmpeg.martin-riedl.de/download/linux/amd64/1783011670_8.1.2/ffmpeg.zip',
       sha256: '56452c0bfc4ee0325cd615d62f46ba8264f62eed34f727c2224c6c84fa7b8719',
       entry: 'ffmpeg'
-    },
-    ffprobe: {
-      url: 'https://ffmpeg.martin-riedl.de/download/linux/amd64/1783011670_8.1.2/ffprobe.zip',
-      sha256: 'c6f2d36e98f9a4445fad0b0be539f4c4faf13fd502116bf131becd53f56cd390',
-      entry: 'ffprobe'
     }
   },
   'darwin-x64': {
@@ -40,11 +35,6 @@ const BUILDS = {
       url: 'https://ffmpeg.martin-riedl.de/download/macos/amd64/1783018342_8.1.2/ffmpeg.zip',
       sha256: 'a52ef43883f44c219766d4b3bdde4e635b35465d0b704c01c3a0566b59775df9',
       entry: 'ffmpeg'
-    },
-    ffprobe: {
-      url: 'https://ffmpeg.martin-riedl.de/download/macos/amd64/1783018342_8.1.2/ffprobe.zip',
-      sha256: '5408ca588c8c72b0dde3afe676d0a7acf25ef97e55ae6eba5c7bede1cda42695',
-      entry: 'ffprobe'
     }
   },
   'darwin-arm64': {
@@ -54,11 +44,6 @@ const BUILDS = {
       url: 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffmpeg.zip',
       sha256: 'ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c',
       entry: 'ffmpeg'
-    },
-    ffprobe: {
-      url: 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffprobe.zip',
-      sha256: 'c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf',
-      entry: 'ffprobe'
     }
   },
   'win32-x64': {
@@ -68,18 +53,8 @@ const BUILDS = {
       url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-02-28-12-59/ffmpeg-n8.0.1-66-g27b8d1a017-win64-gpl-8.0.zip',
       sha256: 'e1f9fc491ef1969e666cfe36ec1d6c02b53baf49df800d5256eda10c942b1251',
       entry: /\/bin\/ffmpeg\.exe$/
-    },
-    ffprobe: {
-      url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-02-28-12-59/ffmpeg-n8.0.1-66-g27b8d1a017-win64-gpl-8.0.zip',
-      sha256: 'e1f9fc491ef1969e666cfe36ec1d6c02b53baf49df800d5256eda10c942b1251',
-      entry: /\/bin\/ffprobe\.exe$/
     }
   }
-}
-
-const build = BUILDS[platformKey]
-if (!build) {
-  throw new Error(`No pinned FFmpeg build is configured for ${platformKey}.`)
 }
 
 await Promise.all([
@@ -88,21 +63,69 @@ await Promise.all([
 ])
 
 const packagedFfmpegPath = join(outputDirectory, `ffmpeg${executableSuffix}`)
-const packagedFfprobePath = join(outputDirectory, `ffprobe${executableSuffix}`)
-await Promise.all([
-  installBinary(build.ffmpeg, packagedFfmpegPath),
-  installBinary(build.ffprobe, packagedFfprobePath)
-])
+const localSourceBuild = join(
+  projectRoot,
+  'native',
+  'ffmpeg-build',
+  'dist',
+  platformKey,
+  `ffmpeg${executableSuffix}`
+)
+const sourceBuild = process.env.HAYATAN_FFMPEG_PATH
+  ? resolve(projectRoot, process.env.HAYATAN_FFMPEG_PATH)
+  : localSourceBuild
+let expectedVersion
+let sourceDescription
 
-if (process.platform !== 'win32') {
+if (existsSync(sourceBuild)) {
+  const artifactDirectory = dirname(sourceBuild)
+  const artifactLicense = join(artifactDirectory, 'FFMPEG-LICENSE.txt')
+  const artifactSources = join(artifactDirectory, 'FFMPEG-SOURCES.txt')
+  const artifactThirdPartyLicenses = join(artifactDirectory, 'FFMPEG-THIRD-PARTY-LICENSES.txt')
+  if (!existsSync(artifactLicense) || !existsSync(artifactSources) || !existsSync(artifactThirdPartyLicenses)) {
+    throw new Error(`Source-built FFmpeg is missing its license or source notices beside ${sourceBuild}.`)
+  }
   await Promise.all([
-    chmod(packagedFfmpegPath, 0o755),
-    chmod(packagedFfprobePath, 0o755)
+    copyFile(sourceBuild, packagedFfmpegPath),
+    copyFile(artifactLicense, join(outputDirectory, 'FFMPEG-LICENSE.txt')),
+    copyFile(artifactSources, join(outputDirectory, 'FFMPEG-SOURCES.txt')),
+    copyFile(artifactThirdPartyLicenses, join(outputDirectory, 'FFMPEG-THIRD-PARTY-LICENSES.txt'))
+  ])
+  expectedVersion = '8.1.2'
+  sourceDescription = `source build at ${sourceBuild}`
+} else {
+  const build = BUILDS[platformKey]
+  if (!build) {
+    throw new Error(`No source-built or pinned fallback FFmpeg is configured for ${platformKey}.`)
+  }
+  await installBinary(build.ffmpeg, packagedFfmpegPath)
+  expectedVersion = build.version
+  sourceDescription = `${build.provider} fallback`
+
+  const packagedLicense = await readFile(join(outputDirectory, 'FFMPEG-LICENSE.txt'), 'utf8')
+  await Promise.all([
+    writeFile(join(outputDirectory, 'FFMPEG-LICENSE.txt'), packagedLicense),
+    writeFile(join(outputDirectory, 'FFMPEG-SOURCES.txt'), [
+      `Packaged platform: ${platformKey}`,
+      `Packaged version: ${build.version}`,
+      `Binary provider: ${build.provider}`,
+      '',
+      `FFmpeg archive: ${build.ffmpeg.url}`,
+      `FFmpeg archive SHA-256: ${build.ffmpeg.sha256}`,
+      '',
+      'FFmpeg source and license information: https://ffmpeg.org/',
+      'Martin Riedl binary provider: https://ffmpeg.martin-riedl.de/',
+      'BtbN binary provider and build sources: https://github.com/BtbN/FFmpeg-Builds',
+      ''
+    ].join('\n'))
   ])
 }
 
-validateVersion(packagedFfmpegPath, build.version)
-validateVersion(packagedFfprobePath, build.version)
+if (process.platform !== 'win32') {
+  await chmod(packagedFfmpegPath, 0o755)
+}
+
+validateVersion(packagedFfmpegPath, expectedVersion)
 validateCapability(packagedFfmpegPath, ['-hide_banner', '-encoders'], [
   'libmp3lame', 'png', 'mjpeg', 'libwebp', 'libwebp_anim', 'libaom-av1'
 ], 'encoders')
@@ -113,28 +136,7 @@ validateCapability(packagedFfmpegPath, ['-hide_banner', '-muxers'], [
   ' avif ', ' webp ', ' mp3 '
 ], 'muxers')
 
-const gplLicense = await readFile(join(outputDirectory, 'FFMPEG-LICENSE.txt'), 'utf8')
-await Promise.all([
-  writeFile(join(outputDirectory, 'FFMPEG-LICENSE.txt'), gplLicense),
-  writeFile(join(outputDirectory, 'FFPROBE-LICENSE.txt'), gplLicense),
-  writeFile(join(outputDirectory, 'FFMPEG-SOURCES.txt'), [
-    `Packaged platform: ${platformKey}`,
-    `Packaged version: ${build.version}`,
-    `Binary provider: ${build.provider}`,
-    '',
-    `FFmpeg archive: ${build.ffmpeg.url}`,
-    `FFmpeg archive SHA-256: ${build.ffmpeg.sha256}`,
-    `FFprobe archive: ${build.ffprobe.url}`,
-    `FFprobe archive SHA-256: ${build.ffprobe.sha256}`,
-    '',
-    'FFmpeg source and license information: https://ffmpeg.org/',
-    'Martin Riedl binary provider: https://ffmpeg.martin-riedl.de/',
-    'BtbN binary provider and build sources: https://github.com/BtbN/FFmpeg-Builds',
-    ''
-  ].join('\n'))
-])
-
-console.log(`Prepared FFmpeg ${build.version} and FFprobe for ${platformKey}.`)
+console.log(`Prepared FFmpeg ${expectedVersion} for ${platformKey} from ${sourceDescription}.`)
 
 /**
  * @param {{ url: string, sha256: string, entry: string | RegExp }} artifact
@@ -221,7 +223,7 @@ async function sha256 (path) {
 
 function validateVersion (executable, expectedVersion) {
   const result = spawnSync(executable, ['-version'], { encoding: 'utf8', maxBuffer: 1024 * 1024 })
-  if (result.error ?? result.status !== 0) {
+  if (result.status !== 0) {
     throw new Error(`Could not inspect packaged binary version: ${result.error?.message ?? result.stderr}`)
   }
   if (!result.stdout.includes(expectedVersion)) {
@@ -237,7 +239,7 @@ function validateVersion (executable, expectedVersion) {
  */
 function validateCapability (executable, args, requirements, label) {
   const result = spawnSync(executable, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-  if (result.error ?? result.status !== 0) {
+  if (result.status !== 0) {
     throw new Error(`Could not inspect packaged FFmpeg ${label}: ${result.error?.message ?? result.stderr}`)
   }
   const output = `${result.stdout}\n${result.stderr}`

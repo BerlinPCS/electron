@@ -22,11 +22,9 @@ extraResources:
       - hoshidicts-sidecar.exe
       - ffmpeg
       - ffmpeg.exe
-      - ffprobe
-      - ffprobe.exe
       - FFMPEG-LICENSE.txt
-      - FFPROBE-LICENSE.txt
       - FFMPEG-SOURCES.txt
+      - FFMPEG-THIRD-PARTY-LICENSES.txt
 files:
   - "!**/.vscode/*"
   - "!src/*"
@@ -66,7 +64,7 @@ nsis:
   deleteAppDataOnUninstall: true
   allowToChangeInstallationDirectory: true
 mac:
-  x64ArchFiles: "{**/*.node,**/sidecars/ffmpeg,**/sidecars/ffprobe}"
+  x64ArchFiles: "{**/*.node,**/sidecars/ffmpeg}"
   artifactName: ${os}-${name}-${version}-mac.${ext}
   entitlementsInherit: build/entitlements.mac.plist
   defaultArch: universal

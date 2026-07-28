@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, extname, join } from 'node:path'
+import { basename, join } from 'node:path'
+
+import { parseBuffer } from 'music-metadata'
 
 export type MiningCaptureMode = 'static' | 'animated'
 export type MiningStaticImageFormat = 'png' | 'jpeg' | 'webp' | 'avif'
@@ -41,7 +43,6 @@ export interface MiningMediaEncoderState {
 
 export interface MiningMediaEncoderOptions {
   ffmpegPath: string
-  ffprobePath: string
   spawnImplementation?: typeof spawn
   fetchImplementation?: typeof fetch
   temporaryRoot?: string
@@ -136,9 +137,6 @@ export class MiningMediaEncoder {
     if (!existsSync(this.options.ffmpegPath)) {
       return { available: false, error: 'The packaged FFmpeg binary is unavailable.' }
     }
-    if (!existsSync(this.options.ffprobePath)) {
-      return { available: false, error: 'The packaged FFprobe binary is unavailable.' }
-    }
     return { available: true }
   }
 
@@ -197,23 +195,17 @@ export class MiningMediaEncoder {
 
   async probeDuration (media: { filename: string, data: Uint8Array }): Promise<number | undefined> {
     if (this.stopped || !this.state().available) return
-    const temporaryDirectory = await mkdtemp(join(this.temporaryRoot, 'hayase-probe-'))
     try {
-      const extension = safeExtension(media.filename)
-      const path = join(temporaryDirectory, `word-audio${extension}`)
-      await writeFile(path, media.data)
-      const output = await this.run(this.options.ffprobePath, [
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        path
-      ], true)
-      const duration = Number(output.trim())
-      return Number.isFinite(duration) && duration > 0 && duration <= 60 * 60 ? duration : undefined
+      const metadata = await parseBuffer(media.data, {
+        path: safeFilename(media.filename),
+        size: media.data.byteLength
+      }, { duration: true, skipCovers: true })
+      const duration = metadata.format.duration
+      return typeof duration === 'number' && Number.isFinite(duration) && duration > 0 && duration <= 60 * 60
+        ? duration
+        : undefined
     } catch {
       return undefined
-    } finally {
-      await rm(temporaryDirectory, { recursive: true, force: true })
     }
   }
 
@@ -241,16 +233,15 @@ export class MiningMediaEncoder {
     }
   }
 
-  private run (executable: string, args: string[], captureStdout = false) {
-    return new Promise<string>((resolve, reject) => {
+  private run (executable: string, args: string[]) {
+    return new Promise<void>((resolve, reject) => {
       const process = this.spawn(executable, args, {
         shell: false,
         windowsHide: true,
-        stdio: ['ignore', captureStdout ? 'pipe' : 'ignore', 'pipe']
+        stdio: ['ignore', 'ignore', 'pipe']
       })
       this.running.add(process)
       let stderr = ''
-      let stdout = ''
       let settled = false
       let timeoutError: Error | undefined
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined
@@ -262,7 +253,7 @@ export class MiningMediaEncoder {
         if (forceKillTimer) clearTimeout(forceKillTimer)
         if (abandonTimer) clearTimeout(abandonTimer)
         this.running.delete(process)
-        error ? reject(error) : resolve(stdout)
+        error ? reject(error) : resolve()
       }
       const timeout = setTimeout(() => {
         timeoutError = new Error('FFmpeg media capture timed out.')
@@ -275,14 +266,7 @@ export class MiningMediaEncoder {
         forceKillTimer.unref()
       }, this.timeoutMs)
       timeout.unref()
-      process.stdout?.on('data', chunk => {
-        stdout += String(chunk)
-        if (Buffer.byteLength(stdout) > 1024 * 1024) {
-          process.kill()
-          finish(new Error('FFprobe returned too much output.'))
-        }
-      })
-      process.stderr?.on('data', chunk => {
+      process.stderr.on('data', chunk => {
         if (stderr.length < 64 * 1024) stderr += String(chunk)
       })
       process.once('error', error => finish(new Error(`Could not start media encoder: ${error.message}`)))
@@ -463,11 +447,10 @@ function appendMiningImageEncoderArguments (
 }
 
 export function resolveMiningMediaExecutable (
-  name: 'ffmpeg' | 'ffprobe',
   options: { appPath: string, resourcesPath: string, isPackaged: boolean, platform?: typeof process.platform }
 ) {
   const platform = options.platform ?? process.platform
-  const executable = `${name}${platform === 'win32' ? '.exe' : ''}`
+  const executable = `ffmpeg${platform === 'win32' ? '.exe' : ''}`
   return options.isPackaged
     ? join(options.resourcesPath, 'sidecars', executable)
     : join(options.appPath, 'resources', 'sidecars', executable)
@@ -501,11 +484,6 @@ function miningInputArguments (source: string, inputSeek: number) {
     '-ss', decimal(inputSeek),
     '-i', source
   ]
-}
-
-function safeExtension (filename: string) {
-  const extension = extname(safeFilename(filename)).toLowerCase()
-  return /^\.[a-z0-9]{1,10}$/.test(extension) ? extension : '.bin'
 }
 
 function imageMimeType (format: MiningStaticImageFormat | MiningAnimatedImageFormat) {

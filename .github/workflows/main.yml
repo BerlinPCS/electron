@@ -76,6 +76,14 @@ jobs:
             exit 1
           fi
 
+      - name: Install minimal FFmpeg build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Build minimal FFmpeg sidecar
+        if: runner.os == 'Linux'
+        run: npm run build:ffmpeg:source
+
       - name: Build and Publish
         if: runner.os != 'macOS'
         env:

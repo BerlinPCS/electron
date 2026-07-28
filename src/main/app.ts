@@ -121,12 +121,7 @@ export default class App {
 
   miningAudio = new MiningAudioRepository(join(app.getPath('userData'), 'mining', 'audio'))
   miningMedia = new MiningMediaEncoder({
-    ffmpegPath: resolveMiningMediaExecutable('ffmpeg', {
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged
-    }),
-    ffprobePath: resolveMiningMediaExecutable('ffprobe', {
+    ffmpegPath: resolveMiningMediaExecutable({
       appPath: app.getAppPath(),
       resourcesPath: process.resourcesPath,
       isPackaged: app.isPackaged
