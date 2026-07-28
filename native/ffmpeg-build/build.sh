@@ -112,7 +112,7 @@ fetch "zlib-$ZLIB_VERSION.tar.gz" "$ZLIB_URL" "$ZLIB_SHA256"
 extract "$download_directory/ffmpeg-$FFMPEG_VERSION.tar.xz" "$source_directory/ffmpeg"
 extract "$download_directory/lame-$LAME_VERSION.tar.gz" "$source_directory/lame"
 extract "$download_directory/libwebp-$LIBWEBP_VERSION.tar.gz" "$source_directory/libwebp"
-extract "$download_directory/aom-$AOM_VERSION.tar.gz" "$source_directory/aom" 0
+extract "$download_directory/aom-$AOM_VERSION.tar.gz" "$source_directory/aom"
 extract "$download_directory/openssl-$OPENSSL_VERSION.tar.gz" "$source_directory/openssl"
 extract "$download_directory/zlib-$ZLIB_VERSION.tar.gz" "$source_directory/zlib"
 
