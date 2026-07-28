@@ -14,6 +14,7 @@ import type {
   HoshidictsHello,
   MiningDictionaryEvent,
   MiningDictionaryEntry,
+  MiningDictionaryKanjiResult,
   MiningDictionaryKind,
   MiningDictionaryLookupRequest,
   MiningDictionaryLookupResult,
@@ -97,6 +98,14 @@ export default class HoshidictsSupervisor {
     const client = this.client
     if (!client) throw new HoshidictsError({ code: 'BACKEND_UNAVAILABLE', message: 'Dictionary backend is unavailable' })
     return normalizeLookupResult(await client.requestLatestLookup<unknown>(request))
+  }
+
+  async kanji (character: string): Promise<MiningDictionaryKanjiResult> {
+    if (typeof character !== 'string' || [...character].length !== 1 || !/\p{Script=Han}/u.test(character)) {
+      throw new HoshidictsError({ code: 'INVALID_REQUEST', message: 'Kanji lookup character is invalid' })
+    }
+    await this.start()
+    return normalizeKanjiResult(await this.request<unknown>('kanji', { character }))
   }
 
   async media (dictionary: string, path: string): Promise<Buffer> {
@@ -354,7 +363,7 @@ function validateId (id: string) {
 }
 
 function validateKind (kind: string): asserts kind is MiningDictionaryKind {
-  if (kind !== 'term' && kind !== 'frequency' && kind !== 'pitch') {
+  if (kind !== 'term' && kind !== 'frequency' && kind !== 'pitch' && kind !== 'kanji') {
     throw new HoshidictsError({ code: 'INVALID_REQUEST', message: 'Dictionary kind is invalid' })
   }
 }
@@ -365,7 +374,7 @@ function emptyUnavailableState (error: string): MiningDictionaryState {
     generation: 0,
     error,
     dictionaries: [],
-    order: { term: [], frequency: [], pitch: [] },
+    order: { term: [], frequency: [], pitch: [], kanji: [] },
     styles: {}
   }
 }
@@ -402,13 +411,18 @@ function normalizeState (value: unknown): MiningDictionaryState {
         term: protocolNumber(counts.term, 'term count'),
         frequency: protocolNumber(counts.frequency, 'frequency count'),
         pitch: protocolNumber(counts.pitch, 'pitch count'),
+        kanji: protocolNumber(counts.kanji, 'kanji count'),
         media: protocolNumber(counts.media, 'media count')
       },
       enabled: {
         term: protocolBoolean(enabled.term, 'term enabled state'),
         frequency: protocolBoolean(enabled.frequency, 'frequency enabled state'),
-        pitch: protocolBoolean(enabled.pitch, 'pitch enabled state')
-      }
+        pitch: protocolBoolean(enabled.pitch, 'pitch enabled state'),
+        kanji: protocolBoolean(enabled.kanji, 'kanji enabled state')
+      },
+      warnings: dictionary.warnings == null
+        ? []
+        : protocolStringArray(dictionary.warnings, 'dictionary warnings')
     }
   })
   const order = protocolRecord(state.order, 'dictionary order')
@@ -426,7 +440,8 @@ function normalizeState (value: unknown): MiningDictionaryState {
     order: {
       term: protocolStringArray(order.term, 'term dictionary order'),
       frequency: protocolStringArray(order.frequency, 'frequency dictionary order'),
-      pitch: protocolStringArray(order.pitch, 'pitch dictionary order')
+      pitch: protocolStringArray(order.pitch, 'pitch dictionary order'),
+      kanji: protocolStringArray(order.kanji, 'kanji dictionary order')
     },
     styles: normalizedStyles
   }
@@ -482,7 +497,39 @@ function normalizeLookupEntry (value: unknown): MiningDictionaryEntry {
       return {
         dictionary: protocolString(pitch.dictionary, 'pitch dictionary'),
         pitchPositions: protocolNumberArray(pitch.pitchPositions, 'pitch positions'),
+        accents: protocolArray(pitch.accents, 'pitch accents').map(value => {
+          const accent = protocolRecord(value, 'pitch accent')
+          return {
+            position: protocolNumber(accent.position, 'pitch accent position'),
+            pattern: protocolString(accent.pattern, 'pitch accent pattern'),
+            nasal: protocolNumberArray(accent.nasal, 'pitch accent nasal positions'),
+            devoice: protocolNumberArray(accent.devoice, 'pitch accent devoice positions')
+          }
+        }),
         transcriptions: protocolStringArray(pitch.transcriptions, 'pitch transcriptions')
+      }
+    })
+  }
+}
+
+function normalizeKanjiResult (value: unknown): MiningDictionaryKanjiResult {
+  const result = protocolRecord(value, 'kanji result')
+  return {
+    character: protocolString(result.character, 'kanji character'),
+    entries: protocolArray(result.entries, 'kanji entries').map(value => {
+      const entry = protocolRecord(value, 'kanji entry')
+      const stats = protocolRecord(entry.stats, 'kanji stats')
+      const normalizedStats: Record<string, string> = {}
+      for (const [name, stat] of Object.entries(stats)) {
+        normalizedStats[name] = protocolString(stat, 'kanji stat')
+      }
+      return {
+        dictionary: protocolString(entry.dictionary, 'kanji dictionary'),
+        onyomi: protocolString(entry.onyomi, 'kanji onyomi'),
+        kunyomi: protocolString(entry.kunyomi, 'kanji kunyomi'),
+        tags: protocolString(entry.tags, 'kanji tags'),
+        definitions: protocolStringArray(entry.definitions, 'kanji definitions'),
+        stats: normalizedStats
       }
     })
   }

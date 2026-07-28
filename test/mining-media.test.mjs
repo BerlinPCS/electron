@@ -143,7 +143,6 @@ test('does not retry combined capture after an FFmpeg failure', async () => {
   }
   const encoder = new MiningMediaEncoder({
     ffmpegPath: '/bin/true',
-    ffprobePath: '/bin/true',
     spawnImplementation,
     fetchImplementation: async () => new Response(null, { status: 200 })
   })
@@ -157,17 +156,50 @@ test('does not retry combined capture after an FFmpeg failure', async () => {
   assert.ok(calls[0].some(value => value.endsWith('.mp3')))
 })
 
-test('resolves development and packaged sidecar paths without system fallback', () => {
-  assert.equal(resolveMiningMediaExecutable('ffmpeg', {
+test('reads audio duration without starting an FFmpeg sidecar', async () => {
+  const sampleRate = 8_000
+  const duration = 0.25
+  const sampleCount = sampleRate * duration
+  const wave = Buffer.alloc(44 + sampleCount * 2)
+  wave.write('RIFF', 0)
+  wave.writeUInt32LE(wave.length - 8, 4)
+  wave.write('WAVEfmt ', 8)
+  wave.writeUInt32LE(16, 16)
+  wave.writeUInt16LE(1, 20)
+  wave.writeUInt16LE(1, 22)
+  wave.writeUInt32LE(sampleRate, 24)
+  wave.writeUInt32LE(sampleRate * 2, 28)
+  wave.writeUInt16LE(2, 32)
+  wave.writeUInt16LE(16, 34)
+  wave.write('data', 36)
+  wave.writeUInt32LE(sampleCount * 2, 40)
+
+  const encoder = new MiningMediaEncoder({ ffmpegPath: '/bin/true' })
+  assert.equal(await encoder.probeDuration({
+    filename: 'word.wav',
+    data: wave
+  }), duration)
+})
+
+test('returns no duration for invalid audio data', async () => {
+  const encoder = new MiningMediaEncoder({ ffmpegPath: '/bin/true' })
+  assert.equal(await encoder.probeDuration({
+    filename: 'word.mp3',
+    data: new Uint8Array([1, 2, 3])
+  }), undefined)
+})
+
+test('resolves development and packaged FFmpeg paths without system fallback', () => {
+  assert.equal(resolveMiningMediaExecutable({
     appPath: '/app',
     resourcesPath: '/resources',
     isPackaged: false,
     platform: 'linux'
   }), '/app/resources/sidecars/ffmpeg')
-  assert.equal(resolveMiningMediaExecutable('ffprobe', {
+  assert.equal(resolveMiningMediaExecutable({
     appPath: 'C:\\app',
     resourcesPath: 'C:\\resources',
     isPackaged: true,
     platform: 'win32'
-  }), 'C:\\resources/sidecars/ffprobe.exe')
+  }), 'C:\\resources/sidecars/ffmpeg.exe')
 })

@@ -5,7 +5,8 @@ BerlinPCS Hoshidicts fork in `vendor/hoshidicts`. It owns Hayase-specific
 concerns:
 
 - the newline-delimited JSON protocol;
-- dictionary manifests, ordering, enablement, and removal;
+- term, frequency, pitch, and kanji manifests, ordering, enablement, and removal;
+- per-dictionary migration and storage-health warnings;
 - transactional and partial-success batch imports;
 - Yomitan filename category overrides such as `[Freq]` and `[Pitch]`;
 - coarse import progress and state events.

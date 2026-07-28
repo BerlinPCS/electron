@@ -239,7 +239,7 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
       Front: '{expression}',
       WordAudio: '{audio}',
       SentenceAudio: '{sentence-audio}',
-      Back: '{sentence}<br>{furigana-plain}<br>{frequencies}<br>{timestamp}<br>{screenshot}<br>dict.png'
+      Back: '{sentence}<br>{furigana-plain}<br>{frequencies}<br>{timestamp}<br>{screenshot}<br>{glossary}'
     }
   }
   const requests = []
@@ -272,6 +272,7 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
       matched: '食べる',
       furiganaPlain: '食[た]べる',
       frequenciesHtml: '<ol><li>100</li></ol>',
+      glossary: '<a href="https://www.pixiv.net"><span class="gloss-image-container"><img src="dict.png" width="35" height="35"></span> pixivで読む</a>',
       audio: 'https://audio.example/word.opus',
       dictionaryMedia: [{ dictionary: 'JMdict', path: 'dict.png', filename: 'dict.png' }]
     },
@@ -298,7 +299,8 @@ test('add stores host-loaded media, adds note, and force syncs', async () => {
   assert.match(note.fields.WordAudio, /^\[sound:word_[0-9a-f-]+\.opus\]$/)
   assert.match(note.fields.SentenceAudio, /^\[sound:sentence_[0-9a-f-]+\.wav\]$/)
   assert.match(note.fields.Back, /<img src="shot_[0-9a-f-]+\.png">/)
-  assert.match(note.fields.Back, /<img src="dict_[0-9a-f-]+\.png">/)
+  assert.match(note.fields.Back, /<img src="dict_[0-9a-f-]+\.png" width="35" height="35">/)
+  assert.doesNotMatch(note.fields.Back, /src="<img/)
   assert.equal(requests.at(-1).action, 'sync')
 })
 

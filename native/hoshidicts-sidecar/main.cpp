@@ -52,6 +52,7 @@ namespace {
 
 constexpr std::size_t kMaximumProtocolLine = 8 * 1024 * 1024;
 constexpr int64_t kManifestSchemaVersion = 1;
+constexpr int64_t kCurrentDictionaryImportVersion = 2;
 
 fs::path path_from_utf8(std::string_view value) {
   return fs::path(
@@ -179,6 +180,12 @@ std::vector<std::string> require_string_array(const JsonObject &object,
   return result;
 }
 
+std::vector<std::string> optional_string_array(const JsonObject &object,
+                                               std::string_view name) {
+  return object.contains(name) ? require_string_array(object, name)
+                               : std::vector<std::string>{};
+}
+
 Json string_array(const std::vector<std::string> &values) {
   JsonArray result;
   result.reserve(values.size());
@@ -261,6 +268,7 @@ struct Counts {
   uint64_t term = 0;
   uint64_t frequency = 0;
   uint64_t pitch = 0;
+  uint64_t kanji = 0;
   uint64_t media = 0;
 };
 
@@ -268,6 +276,7 @@ struct Enabled {
   bool term = false;
   bool frequency = false;
   bool pitch = false;
+  bool kanji = false;
 };
 
 struct DictionaryRecord {
@@ -275,15 +284,18 @@ struct DictionaryRecord {
   std::string title;
   std::string revision;
   int64_t format = 0;
+  int64_t import_version = 0;
   Counts counts;
   Enabled enabled;
   bool term_backed_pitch = false;
+  bool storage_valid = true;
 };
 
 struct Orders {
   std::vector<std::string> term;
   std::vector<std::string> frequency;
   std::vector<std::string> pitch;
+  std::vector<std::string> kanji;
 };
 
 struct Manifest {
@@ -297,22 +309,39 @@ Json counts_json(const Counts &counts) {
   return JsonObject{{"term", counts.term},
                       {"frequency", counts.frequency},
                       {"pitch", counts.pitch},
+                      {"kanji", counts.kanji},
                       {"media", counts.media}};
 }
 
 Json enabled_json(const Enabled &enabled) {
   return JsonObject{{"term", enabled.term},
                       {"frequency", enabled.frequency},
-                      {"pitch", enabled.pitch}};
+                      {"pitch", enabled.pitch},
+                      {"kanji", enabled.kanji}};
 }
 
 Json dictionary_json(const DictionaryRecord &dictionary) {
+  JsonArray warnings;
+  if (dictionary.import_version < kCurrentDictionaryImportVersion &&
+      dictionary.counts.term > 0 && dictionary.counts.frequency == 0 &&
+      dictionary.counts.pitch == 0 && dictionary.counts.kanji == 0) {
+    warnings.emplace_back(
+        "This dictionary was imported with an older dictionary engine. "
+        "Reimport it to restore any kanji data and verify its contents.");
+  }
+  if (!dictionary.storage_valid) {
+    warnings.emplace_back(
+        "This dictionary's imported files are missing or damaged. Remove it "
+        "and import the original ZIP again.");
+  }
   return JsonObject{{"id", dictionary.id},
                       {"title", dictionary.title},
                       {"revision", dictionary.revision},
                       {"format", dictionary.format},
+                      {"importVersion", dictionary.import_version},
                       {"counts", counts_json(dictionary.counts)},
                       {"enabled", enabled_json(dictionary.enabled)},
+                      {"warnings", std::move(warnings)},
                       {"termBackedPitch", dictionary.term_backed_pitch}};
 }
 
@@ -329,7 +358,8 @@ Json manifest_json(const Manifest &manifest) {
       {"order",
        JsonObject{{"term", string_array(manifest.order.term)},
                     {"frequency", string_array(manifest.order.frequency)},
-                    {"pitch", string_array(manifest.order.pitch)}}}};
+                    {"pitch", string_array(manifest.order.pitch)},
+                    {"kanji", string_array(manifest.order.kanji)}}}};
 }
 
 uint64_t optional_unsigned(const JsonObject &object, std::string_view name,
@@ -376,12 +406,15 @@ Manifest parse_manifest(const Json &json) {
     dictionary.title = require_string(item, "title");
     dictionary.revision = optional_string(item, "revision");
     dictionary.format = static_cast<int64_t>(optional_unsigned(item, "format"));
+    dictionary.import_version =
+        static_cast<int64_t>(optional_unsigned(item, "importVersion"));
     if (const Json *counts = find_member(value, "counts");
         counts && counts->is_object()) {
       dictionary.counts.term = optional_unsigned(counts->get_object(), "term");
       dictionary.counts.frequency =
           optional_unsigned(counts->get_object(), "frequency");
       dictionary.counts.pitch = optional_unsigned(counts->get_object(), "pitch");
+      dictionary.counts.kanji = optional_unsigned(counts->get_object(), "kanji");
       dictionary.counts.media = optional_unsigned(counts->get_object(), "media");
     }
     if (const Json *enabled = find_member(value, "enabled");
@@ -391,6 +424,8 @@ Manifest parse_manifest(const Json &json) {
           optional_boolean(enabled->get_object(), "frequency");
       dictionary.enabled.pitch =
           optional_boolean(enabled->get_object(), "pitch");
+      dictionary.enabled.kanji =
+          optional_boolean(enabled->get_object(), "kanji");
     }
     dictionary.term_backed_pitch = optional_boolean(item, "termBackedPitch");
     manifest.dictionaries.push_back(std::move(dictionary));
@@ -401,6 +436,7 @@ Manifest parse_manifest(const Json &json) {
   manifest.order.term = require_string_array(order_object, "term");
   manifest.order.frequency = require_string_array(order_object, "frequency");
   manifest.order.pitch = require_string_array(order_object, "pitch");
+  manifest.order.kanji = optional_string_array(order_object, "kanji");
   return manifest;
 }
 
@@ -411,12 +447,15 @@ DictionaryRecord parse_dictionary_record(const Json &value) {
   dictionary.title = require_string(item, "title");
   dictionary.revision = optional_string(item, "revision");
   dictionary.format = static_cast<int64_t>(optional_unsigned(item, "format"));
+  dictionary.import_version =
+      static_cast<int64_t>(optional_unsigned(item, "importVersion"));
   if (const Json *counts = find_member(value, "counts");
       counts && counts->is_object()) {
     dictionary.counts.term = optional_unsigned(counts->get_object(), "term");
     dictionary.counts.frequency =
         optional_unsigned(counts->get_object(), "frequency");
     dictionary.counts.pitch = optional_unsigned(counts->get_object(), "pitch");
+    dictionary.counts.kanji = optional_unsigned(counts->get_object(), "kanji");
     dictionary.counts.media = optional_unsigned(counts->get_object(), "media");
   }
   if (const Json *enabled = find_member(value, "enabled");
@@ -425,6 +464,7 @@ DictionaryRecord parse_dictionary_record(const Json &value) {
     dictionary.enabled.frequency =
         optional_boolean(enabled->get_object(), "frequency");
     dictionary.enabled.pitch = optional_boolean(enabled->get_object(), "pitch");
+    dictionary.enabled.kanji = optional_boolean(enabled->get_object(), "kanji");
   }
   dictionary.term_backed_pitch = optional_boolean(item, "termBackedPitch");
   return dictionary;
@@ -495,7 +535,11 @@ std::vector<std::string> &order_for(Orders &orders, std::string_view kind) {
   if (kind == "pitch") {
     return orders.pitch;
   }
-  throw SidecarError("INVALID_KIND", "kind must be term, frequency, or pitch");
+  if (kind == "kanji") {
+    return orders.kanji;
+  }
+  throw SidecarError("INVALID_KIND",
+                     "kind must be term, frequency, pitch, or kanji");
 }
 
 const std::vector<std::string> &order_for(const Orders &orders,
@@ -513,7 +557,11 @@ bool &enabled_for(Enabled &enabled, std::string_view kind) {
   if (kind == "pitch") {
     return enabled.pitch;
   }
-  throw SidecarError("INVALID_KIND", "kind must be term, frequency, or pitch");
+  if (kind == "kanji") {
+    return enabled.kanji;
+  }
+  throw SidecarError("INVALID_KIND",
+                     "kind must be term, frequency, pitch, or kanji");
 }
 
 uint64_t count_for(const Counts &counts, std::string_view kind) {
@@ -526,7 +574,11 @@ uint64_t count_for(const Counts &counts, std::string_view kind) {
   if (kind == "pitch") {
     return counts.pitch;
   }
-  throw SidecarError("INVALID_KIND", "kind must be term, frequency, or pitch");
+  if (kind == "kanji") {
+    return counts.kanji;
+  }
+  throw SidecarError("INVALID_KIND",
+                     "kind must be term, frequency, pitch, or kanji");
 }
 
 void normalize_order(Manifest &manifest, std::string_view kind) {
@@ -672,12 +724,29 @@ Json lookup_entry_json(const LookupResult &result) {
   JsonArray pitches;
   for (const auto &group : result.term.pitches) {
     JsonArray positions;
-    for (int position : group.pitch_positions) {
-      positions.emplace_back(position);
+    JsonArray accents;
+    for (const auto &pitch : group.pitches) {
+      JsonArray nasal;
+      for (int position : pitch.nasal) {
+        nasal.emplace_back(position);
+      }
+      JsonArray devoice;
+      for (int position : pitch.devoice) {
+        devoice.emplace_back(position);
+      }
+      accents.emplace_back(
+          JsonObject{{"position", pitch.position},
+                     {"pattern", pitch.pattern},
+                     {"nasal", std::move(nasal)},
+                     {"devoice", std::move(devoice)}});
+      if (pitch.pattern.empty()) {
+        positions.emplace_back(pitch.position);
+      }
     }
     pitches.emplace_back(
         JsonObject{{"dictionary", group.dict_name},
                      {"pitchPositions", std::move(positions)},
+                     {"accents", std::move(accents)},
                      {"transcriptions", string_array(group.transcriptions)}});
   }
 
@@ -803,14 +872,15 @@ private:
     normalize_order(manifest_, "term");
     normalize_order(manifest_, "frequency");
     normalize_order(manifest_, "pitch");
+    normalize_order(manifest_, "kanji");
     save_manifest();
     bundle_ = build_bundle(manifest_);
   }
 
   void reconcile() {
-    std::erase_if(manifest_.dictionaries, [&](const auto &dictionary) {
-      return !valid_dictionary_folder(data_ / dictionary.id);
-    });
+    for (auto &dictionary : manifest_.dictionaries) {
+      dictionary.storage_valid = valid_dictionary_folder(data_ / dictionary.id);
+    }
 
     for (const auto &entry : fs::directory_iterator(data_)) {
       if (!entry.is_directory()) {
@@ -841,11 +911,19 @@ private:
               .title = std::move(index.title),
               .revision = std::move(index.revision),
               .format = index.format,
+              .import_version = 0,
               // Older unmanaged folders do not retain import counts. Loading
               // them as term dictionaries is the only inference that does not
               // fabricate frequency or pitch UI entries.
-              .counts = {.term = 1, .frequency = 0, .pitch = 0, .media = 0},
-              .enabled = {.term = true, .frequency = false, .pitch = false},
+              .counts = {.term = 1,
+                         .frequency = 0,
+                         .pitch = 0,
+                         .kanji = 0,
+                         .media = 0},
+              .enabled = {.term = true,
+                          .frequency = false,
+                          .pitch = false,
+                          .kanji = false},
           };
         }
         manifest_.dictionaries.push_back(std::move(dictionary));
@@ -864,6 +942,7 @@ private:
         auto dictionary =
             std::ranges::find(manifest.dictionaries, id, &DictionaryRecord::id);
         if (dictionary == manifest.dictionaries.end() ||
+            !dictionary->storage_valid ||
             !enabled_for(const_cast<Enabled &>(dictionary->enabled), kind)) {
           continue;
         }
@@ -872,6 +951,8 @@ private:
           bundle->query.add_term_dict(path);
         } else if (kind == "frequency") {
           bundle->query.add_freq_dict(path);
+        } else if (kind == "kanji") {
+          bundle->query.add_kanji_dict(path);
         } else if (dictionary->term_backed_pitch) {
           bundle->query.add_term_dict(path);
         } else {
@@ -882,6 +963,7 @@ private:
     add("term", manifest.order.term);
     add("frequency", manifest.order.frequency);
     add("pitch", manifest.order.pitch);
+    add("kanji", manifest.order.kanji);
     return bundle;
   }
 
@@ -914,7 +996,8 @@ private:
         {"order",
          JsonObject{{"term", string_array(manifest_.order.term)},
                       {"frequency", string_array(manifest_.order.frequency)},
-                      {"pitch", string_array(manifest_.order.pitch)}}},
+                      {"pitch", string_array(manifest_.order.pitch)},
+                      {"kanji", string_array(manifest_.order.kanji)}}},
         {"styles", std::move(styles)},
     };
   }
@@ -936,8 +1019,8 @@ private:
                   {"protocolVersion", 1},
                   {"backendVersion", "1.0.0"},
                   {"capabilities",
-                   JsonArray{"lookup", "import", "term", "frequency", "pitch",
-                               "media", "styles", "deinflection",
+                   JsonArray{"lookup", "kanji", "import", "term", "frequency",
+                               "pitch", "media", "styles", "deinflection",
                                "supersession"}},
               });
     } else if (method == "state") {
@@ -945,6 +1028,8 @@ private:
     } else if (method == "lookup") {
       enqueue_lookup(Command{
           .id = id, .method = std::move(method), .params = std::move(params)});
+    } else if (method == "kanji") {
+      send_result(id, perform_kanji(params));
     } else if (method == "media") {
       send_result(id, perform_media(params));
     } else if (method == "import" || method == "setEnabled" ||
@@ -1090,6 +1175,42 @@ private:
         {"data", base64_encode(media.data(), media.size())},
         {"size", static_cast<uint64_t>(media.size())},
     };
+  }
+
+  Json perform_kanji(const Json &params) {
+    const auto &object = require_object(params, "kanji params");
+    std::string character = require_string(object, "character");
+    if (character.empty() || character.size() > 8) {
+      throw SidecarError("INVALID_PARAMS", "kanji character is invalid");
+    }
+    std::shared_ptr<QueryBundle> bundle;
+    {
+      std::lock_guard lock(state_mutex_);
+      bundle = bundle_;
+    }
+    const auto result = bundle->query.query_kanji(character);
+    JsonArray entries;
+    entries.reserve(result.entries.size());
+    for (const auto &entry : result.entries) {
+      JsonArray definitions;
+      for (const auto &definition : entry.definitions) {
+        definitions.emplace_back(definition);
+      }
+      JsonObject stats;
+      for (const auto &[name, value] : entry.stats) {
+        stats.insert_or_assign(name, value);
+      }
+      entries.emplace_back(JsonObject{
+          {"dictionary", entry.dict_name},
+          {"onyomi", entry.onyomi},
+          {"kunyomi", entry.kunyomi},
+          {"tags", entry.tags},
+          {"definitions", std::move(definitions)},
+          {"stats", std::move(stats)},
+      });
+    }
+    return JsonObject{{"character", result.character},
+                      {"entries", std::move(entries)}};
   }
 
   void admin_loop() {
@@ -1254,10 +1375,11 @@ private:
               frequency_labeled || pitch_labeled ? 0 : raw_terms;
           const uint64_t pitches =
               term_backed_pitch ? raw_terms : metadata_pitches;
-          if (terms == 0 && frequencies == 0 && pitches == 0) {
+          const uint64_t kanji = result.summary.counts.kanji.total;
+          if (terms == 0 && frequencies == 0 && pitches == 0 && kanji == 0) {
             throw SidecarError("UNSUPPORTED_DICTIONARY",
                                "dictionary contains no supported term, "
-                               "frequency, or pitch data");
+                               "frequency, pitch, or kanji data");
           }
           std::string id = stable_id(index.title);
           DictionaryRecord record{
@@ -1265,11 +1387,13 @@ private:
               .title = index.title,
               .revision = index.revision,
               .format = index.format,
+              .import_version = kCurrentDictionaryImportVersion,
               .counts =
                   {
                       .term = terms,
                       .frequency = frequencies,
                       .pitch = pitches,
+                      .kanji = kanji,
                       .media = result.summary.counts.media.total,
                   },
               .enabled =
@@ -1277,6 +1401,7 @@ private:
                       .term = terms > 0,
                       .frequency = frequencies > 0,
                       .pitch = pitches > 0,
+                      .kanji = kanji > 0,
                   },
               .term_backed_pitch = term_backed_pitch,
           };
@@ -1352,6 +1477,9 @@ private:
         }
         if (record.counts.pitch > 0) {
           candidate.order.pitch.push_back(record.id);
+        }
+        if (record.counts.kanji > 0) {
+          candidate.order.kanji.push_back(record.id);
         }
       }
       ++candidate.generation;
@@ -1485,6 +1613,7 @@ private:
     std::erase(manifest_.order.term, id);
     std::erase(manifest_.order.frequency, id);
     std::erase(manifest_.order.pitch, id);
+    std::erase(manifest_.order.kanji, id);
     ++manifest_.generation;
     bool moved = false;
     try {
@@ -1493,8 +1622,10 @@ private:
       // the final shared reference unmaps this dictionary before Windows moves
       // it.
       bundle_ = std::move(next_bundle);
-      fs::rename(source, destination);
-      moved = true;
+      if (fs::exists(source)) {
+        fs::rename(source, destination);
+        moved = true;
+      }
       save_manifest();
     } catch (...) {
       manifest_ = std::move(previous);
@@ -1535,7 +1666,8 @@ private:
         {"order",
          JsonObject{{"term", string_array(manifest_.order.term)},
                       {"frequency", string_array(manifest_.order.frequency)},
-                      {"pitch", string_array(manifest_.order.pitch)}}},
+                      {"pitch", string_array(manifest_.order.pitch)},
+                      {"kanji", string_array(manifest_.order.kanji)}}},
         {"styles", std::move(styles)},
     };
   }

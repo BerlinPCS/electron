@@ -230,6 +230,10 @@ export default class IPC {
     return this.app.hoshidicts.lookup(request)
   }
 
+  miningDictionaryLookupKanji (character: string) {
+    return this.app.hoshidicts.kanji(character)
+  }
+
   async miningDictionaryImport () {
     const { filePaths, canceled } = await dialog.showOpenDialog(this.app.mainWindow, {
       title: 'Import Yomitan dictionaries',

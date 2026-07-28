@@ -120,6 +120,7 @@ const native: Partial<Native> = {
   pluginDelete: (id: string) => main.app.plugins.delete(id),
   miningDictionaryState: () => main.miningDictionaryState(),
   miningDictionaryLookup: request => main.miningDictionaryLookup(request),
+  miningDictionaryLookupKanji: character => main.miningDictionaryLookupKanji(character),
   miningDictionaryImport: () => main.miningDictionaryImport(),
   miningDictionarySetEnabled: (id, kind, enabled) => main.miningDictionarySetEnabled(id, kind, enabled),
   miningDictionaryReorder: (kind, ids) => main.miningDictionaryReorder(kind, ids),

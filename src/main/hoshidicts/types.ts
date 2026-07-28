@@ -1,9 +1,10 @@
-export type MiningDictionaryKind = 'term' | 'frequency' | 'pitch'
+export type MiningDictionaryKind = 'term' | 'frequency' | 'pitch' | 'kanji'
 
 export interface MiningDictionaryCounts {
   term: number
   frequency: number
   pitch: number
+  kanji: number
   media: number
 }
 
@@ -11,6 +12,7 @@ export interface MiningDictionaryEnabled {
   term: boolean
   frequency: boolean
   pitch: boolean
+  kanji: boolean
 }
 
 export interface MiningDictionaryDescriptor {
@@ -20,6 +22,7 @@ export interface MiningDictionaryDescriptor {
   format: number
   counts: MiningDictionaryCounts
   enabled: MiningDictionaryEnabled
+  warnings: string[]
 }
 
 export interface MiningDictionaryState {
@@ -63,7 +66,15 @@ export interface MiningDictionaryFrequency {
 export interface MiningDictionaryPitch {
   dictionary: string
   pitchPositions: number[]
+  accents: MiningDictionaryPitchAccent[]
   transcriptions: string[]
+}
+
+export interface MiningDictionaryPitchAccent {
+  position: number
+  pattern: string
+  nasal: number[]
+  devoice: number[]
 }
 
 export interface MiningDictionaryEntry {
@@ -81,6 +92,20 @@ export interface MiningDictionaryEntry {
 export interface MiningDictionaryLookupResult {
   length: number
   entries: MiningDictionaryEntry[]
+}
+
+export interface MiningDictionaryKanjiEntry {
+  dictionary: string
+  onyomi: string
+  kunyomi: string
+  tags: string
+  definitions: string[]
+  stats: Record<string, string>
+}
+
+export interface MiningDictionaryKanjiResult {
+  character: string
+  entries: MiningDictionaryKanjiEntry[]
 }
 
 export interface MiningDictionaryImportProgress {

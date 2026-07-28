@@ -53,7 +53,13 @@ def make_dictionary(path):
         ],
         "term_meta_bank_1.json": [
             ["食べる", "freq", {"reading": "たべる", "frequency": {"value": 42, "displayValue": "42"}}],
-            ["食べる", "pitch", {"reading": "たべる", "pitches": [{"position": 2}]}],
+            ["食べる", "pitch", {"reading": "たべる", "pitches": [
+                {"position": 2, "nasal": 1, "devoice": [2]},
+                {"position": "LHH"},
+            ]}],
+        ],
+        "kanji_bank_1.json": [
+            ["食", "ショク", "た.べる", "", ["eat", "food"], {"grade": "2"}],
         ],
     }
     with zipfile.ZipFile(path, "w") as archive:
@@ -102,12 +108,12 @@ def main():
         sidecar = Sidecar(executable, root)
         hello = sidecar.send(1, "hello", {"protocolVersion": 1})["result"]
         assert hello["protocolVersion"] == 1
-        assert {"lookup", "import", "frequency", "pitch", "media", "supersession"} <= set(hello["capabilities"])
+        assert {"lookup", "kanji", "import", "frequency", "pitch", "media", "supersession"} <= set(hello["capabilities"])
 
         state = sidecar.send(2, "state")["result"]
         assert state["available"] is True
         assert state["dictionaries"] == []
-        assert state["order"] == {"term": [], "frequency": [], "pitch": []}
+        assert state["order"] == {"term": [], "frequency": [], "pitch": [], "kanji": []}
         assert state["styles"] == {}
 
         # Malformed frames return protocol errors without terminating the process.
@@ -118,11 +124,13 @@ def main():
 
         imported = sidecar.send(3, "import", {"paths": [str(dictionary_zip)]})["result"]
         dictionary = imported["dictionaries"][0]
-        assert dictionary["counts"] == {"term": 1, "frequency": 1, "pitch": 1, "media": 1}
+        assert dictionary["counts"] == {"term": 1, "frequency": 1, "pitch": 1, "kanji": 1, "media": 1}
+        assert dictionary["warnings"] == []
         assert imported["order"] == {
             "term": [dictionary["id"]],
             "frequency": [dictionary["id"]],
             "pitch": [dictionary["id"]],
+            "kanji": [dictionary["id"]],
         }
         assert "日本語辞書" in imported["styles"]
         phases = {event["data"]["phase"] for event in sidecar.events if event["event"] == "importProgress"}
@@ -135,8 +143,10 @@ def main():
         )["result"]
         by_title = {item["title"]: item for item in after_batch["dictionaries"]}
         assert set(by_title) == {"日本語辞書", "Test Frequency", "Test Pitch Guide"}
-        assert by_title["Test Frequency"]["counts"] == {"term": 0, "frequency": 1, "pitch": 0, "media": 0}
-        assert by_title["Test Pitch Guide"]["counts"] == {"term": 0, "frequency": 0, "pitch": 1, "media": 0}
+        assert by_title["Test Frequency"]["counts"] == {"term": 0, "frequency": 1, "pitch": 0, "kanji": 0, "media": 0}
+        assert by_title["Test Pitch Guide"]["counts"] == {"term": 0, "frequency": 0, "pitch": 1, "kanji": 0, "media": 0}
+        assert by_title["Test Frequency"]["warnings"] == []
+        assert by_title["Test Pitch Guide"]["warnings"] == []
         import_errors = [event for event in sidecar.events if event["event"] == "importError"]
         assert {event["data"]["fileName"] for event in import_errors} == {
             "unsupported.zip",
@@ -156,6 +166,21 @@ def main():
         assert entry["trace"]
         assert entry["frequencies"][0]["frequencies"][0] == {"value": 42, "displayValue": "42"}
         assert entry["pitches"][0]["pitchPositions"] == [2]
+        assert entry["pitches"][0]["accents"] == [
+            {"position": 2, "pattern": "", "nasal": [1], "devoice": [2]},
+            {"position": 0, "pattern": "LHH", "nasal": [], "devoice": []},
+        ]
+
+        kanji = sidecar.send(50, "kanji", {"character": "食"})["result"]
+        assert kanji["character"] == "食"
+        assert kanji["entries"] == [{
+            "dictionary": "日本語辞書",
+            "onyomi": "ショク",
+            "kunyomi": "た.べる",
+            "tags": "",
+            "definitions": ["eat", "food"],
+            "stats": {"grade": "2"},
+        }]
 
         media = sidecar.send(
             6,
@@ -194,10 +219,33 @@ def main():
         sidecar.send(12, "reorder", {"kind": "term", "ids": [dictionary["id"]]})
         sidecar.close(13)
 
+        # Records created before kanji import support did not carry an import
+        # version, so they remain visible but explicitly ask to be reimported.
+        manifest_path = root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["dictionaries"][0].pop("importVersion", None)
+        manifest["dictionaries"][0]["counts"]["frequency"] = 0
+        manifest["dictionaries"][0]["counts"]["pitch"] = 0
+        manifest["dictionaries"][0]["counts"]["kanji"] = 0
+        manifest["dictionaries"][0]["enabled"]["frequency"] = False
+        manifest["dictionaries"][0]["enabled"]["pitch"] = False
+        manifest["dictionaries"][0]["enabled"]["kanji"] = False
+        manifest["order"]["frequency"] = [
+            item for item in manifest["order"]["frequency"]
+            if item != manifest["dictionaries"][0]["id"]
+        ]
+        manifest["order"]["pitch"] = [
+            item for item in manifest["order"]["pitch"]
+            if item != manifest["dictionaries"][0]["id"]
+        ]
+        manifest["order"]["kanji"] = []
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
         # Manifest state and query data survive a complete sidecar restart.
         sidecar = Sidecar(executable, root)
         persisted = sidecar.send(14, "state")["result"]
         assert persisted["dictionaries"][0]["title"] == "日本語辞書"
+        assert "reimport" in persisted["dictionaries"][0]["warnings"][0].lower()
         assert sidecar.send(
             15,
             "lookup",
@@ -211,6 +259,30 @@ def main():
         assert removed["dictionaries"] == []
         assert not any((root / ".trash").iterdir())
         sidecar.close(23)
+
+        # A manifest entry whose imported files disappeared stays manageable
+        # and is skipped by lookup instead of taking down the backend.
+        missing_id = "missing-dictionary"
+        manifest_path.write_text(json.dumps({
+            "schemaVersion": 1,
+            "generation": 0,
+            "dictionaries": [{
+                "id": missing_id,
+                "title": "Damaged Dictionary",
+                "revision": "1",
+                "format": 3,
+                "importVersion": 2,
+                "counts": {"term": 1, "frequency": 0, "pitch": 0, "kanji": 0, "media": 0},
+                "enabled": {"term": True, "frequency": False, "pitch": False, "kanji": False},
+                "termBackedPitch": False,
+            }],
+            "order": {"term": [missing_id], "frequency": [], "pitch": [], "kanji": []},
+        }, ensure_ascii=False), encoding="utf-8")
+        sidecar = Sidecar(executable, root)
+        damaged = sidecar.send(24, "state")["result"]["dictionaries"][0]
+        assert "missing or damaged" in damaged["warnings"][0].lower()
+        assert sidecar.send(25, "remove", {"id": missing_id})["result"]["dictionaries"] == []
+        sidecar.close(26)
 
         assert (root / "manifest.json").is_file()
         assert (root / "data").is_dir()

@@ -675,10 +675,10 @@ export class MiningAnkiService {
         data: await this.mediaLoaders.loadDictionaryMedia(descriptor.dictionary, descriptor.path)
       }
       const stored = await store(media)
-      replacements.set(
-        descriptor.filename,
-        media.mimeType.startsWith('image/') ? `<img src="${escapeHtmlAttribute(stored)}">` : stored
-      )
+      // Dictionary glossary HTML already contains the surrounding <img> or
+      // media element. Replacing its src value with another complete <img>
+      // tag creates malformed nested markup which Anki displays as text.
+      replacements.set(descriptor.filename, stored)
     }
     timings.mediaStorage = elapsed(storageStartedAt)
     return replacements
