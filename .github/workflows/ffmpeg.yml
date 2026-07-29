@@ -1,0 +1,160 @@
+name: Build minimal FFmpeg release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minimal-ffmpeg-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build FFmpeg (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows x64
+            platform_key: win32-x64
+          - os: ubuntu-22.04
+            platform: Linux x64
+            platform_key: linux-x64
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'false'
+          lfs: 'false'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+
+      - name: Install build tools (Windows)
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            curl
+            make
+            perl
+            tar
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          build-essential
+          cmake
+          curl
+          nasm
+          ninja-build
+          perl
+          pkg-config
+          xz-utils
+
+      - name: Build and verify minimal FFmpeg
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: node scripts/build-ffmpeg.mjs
+
+      - name: Stage release assets
+        shell: bash
+        env:
+          PLATFORM_KEY: ${{ matrix.platform_key }}
+        run: |
+          set -euo pipefail
+          source_directory="native/ffmpeg-build/dist/$PLATFORM_KEY"
+          staging_directory="$RUNNER_TEMP/ffmpeg-release-assets"
+          executable_suffix=
+          if [ "$PLATFORM_KEY" = "win32-x64" ]; then
+            executable_suffix=.exe
+          fi
+
+          mkdir -p "$staging_directory"
+          cp "$source_directory/ffmpeg$executable_suffix" \
+            "$staging_directory/ffmpeg-$PLATFORM_KEY$executable_suffix"
+          for notice in FFMPEG-LICENSE FFMPEG-SOURCES FFMPEG-THIRD-PARTY-LICENSES; do
+            cp "$source_directory/$notice.txt" "$staging_directory/$notice-$PLATFORM_KEY.txt"
+          done
+
+      - name: Upload platform assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.platform_key }}
+          path: ${{ runner.temp }}/ffmpeg-release-assets/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish FFmpeg prerelease
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'false'
+          lfs: 'false'
+
+      - name: Download platform assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ffmpeg-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          for asset in $(find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort); do
+            sha256sum "$asset"
+          done > SHA256SUMS
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 9
+          sha256sum --check SHA256SUMS
+
+      - name: Publish immutable-ready FFmpeg assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_tag=$(tr -d '\r\n' < native/ffmpeg-build/release-tag.txt)
+          . native/ffmpeg-build/sources.env
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $release_tag already exists. Bump release-tag.txt before publishing new binaries."
+            exit 1
+          fi
+
+          gh release create "$release_tag" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "Hayatan minimal FFmpeg $FFMPEG_VERSION" \
+            --notes "Checksum-verified minimal FFmpeg builds for Hayatan. Built from the pinned sources at commit $GITHUB_SHA."
+
+          gh release edit "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --prerelease

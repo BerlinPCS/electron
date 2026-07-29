@@ -34,9 +34,22 @@ artifact. Set `HAYATAN_FFMPEG_PATH` to select another verified build. If neither
 exists, the script keeps using the checksum-pinned prebuilt fallback so release
 platforms are not broken before their source builds have been validated.
 
+Application releases do not compile FFmpeg. Run the **Build minimal FFmpeg
+release** workflow manually after changing FFmpeg sources or build settings.
+It builds Windows x64 and Linux x64, verifies both executables, and publishes
+them with a SHA-256 manifest under the tag in `release-tag.txt`. The normal
+application release workflow downloads those assets, verifies their checksums,
+and installs them into `dist/<platform>-<architecture>/`.
+
+Before publishing replacement binaries, increment the Hayatan revision in
+`release-tag.txt`. Release tags are treated as immutable and are never
+overwritten.
+
 ## Updating
 
 Update one release at a time in `sources.env`, calculate its SHA-256 from the
 downloaded archive, clear that component's cached source/build directories, and
-run a clean build plus `verify.sh`. Keep the upstream source URL available to
-satisfy the corresponding open-source license obligations.
+run a clean build plus `verify.sh`. Increment `release-tag.txt`, run the FFmpeg
+release workflow, and only then publish the next application release. Keep the
+upstream source URL available to satisfy the corresponding open-source license
+obligations.

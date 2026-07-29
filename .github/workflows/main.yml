@@ -20,9 +20,11 @@ jobs:
           - os: windows-latest
             platform: Windows
             architecture: x64
+            ffmpeg_platform: win32-x64
           - os: ubuntu-latest
             platform: Linux
             architecture: x64
+            ffmpeg_platform: linux-x64
 
     steps:
       - name: Check out Git repository
@@ -69,46 +71,24 @@ jobs:
             exit 1
           fi
 
-      - name: Install minimal FFmpeg build tools (Windows)
-        if: runner.os == 'Windows'
-        id: msys2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            curl
-            make
-            perl
-            tar
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-pkgconf
-
-      - name: Install minimal FFmpeg build tools (Linux)
-        if: runner.os == 'Linux'
-        run: >-
-          sudo apt-get update &&
-          sudo apt-get install -y
-          build-essential
-          cmake
-          curl
-          nasm
-          ninja-build
-          perl
-          pkg-config
-          xz-utils
-
-      - name: Install minimal FFmpeg build tools (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cmake nasm ninja pkg-config
-
-      - name: Build minimal FFmpeg sidecar
+      - name: Download minimal FFmpeg sidecar
+        shell: bash
         env:
-          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
-        run: npm run build:ffmpeg:source
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FFMPEG_PLATFORM: ${{ matrix.ffmpeg_platform }}
+        run: |
+          set -euo pipefail
+          release_tag=$(tr -d '\r\n' < native/ffmpeg-build/release-tag.txt)
+          download_directory="$RUNNER_TEMP/hayatan-ffmpeg-release"
+          mkdir -p "$download_directory"
+
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$download_directory" \
+            --pattern SHA256SUMS \
+            --pattern "*-$FFMPEG_PLATFORM*"
+
+          node scripts/install-ffmpeg-release.mjs "$download_directory" "$FFMPEG_PLATFORM"
 
       - name: Build and Publish
         env:
