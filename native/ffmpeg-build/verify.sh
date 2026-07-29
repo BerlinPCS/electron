@@ -38,6 +38,16 @@ case "$(uname -s)" in
       exit 1
     fi
     ;;
+  MINGW*|MSYS*|CYGWIN*)
+    non_system_dependencies=$(objdump -p "$binary" |
+      awk '/DLL Name:/ { print $3 }' |
+      grep -E -i '^(lib)?(aom|mp3lame|webp|sharpyuv|ssl|crypto|zlib|gcc|stdc\+\+|winpthread).*\.dll$' || true)
+    if [ -n "$non_system_dependencies" ]; then
+      echo "FFmpeg unexpectedly uses non-system DLL dependencies:" >&2
+      echo "$non_system_dependencies" >&2
+      exit 1
+    fi
+    ;;
 esac
 
 echo "FFmpeg capabilities and static dependency linkage verified."

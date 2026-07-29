@@ -265,7 +265,8 @@ mkdir -p "$build_directory/ffmpeg"
     --extra-cflags="$CFLAGS" \
     --extra-ldflags="$LDFLAGS $size_ldflags" \
     $x86asm_flag
-  make -j"$jobs" ffmpeg
+  # MinGW names this target ffmpeg.exe rather than ffmpeg.
+  make -j"$jobs" "ffmpeg$executable_suffix"
 )
 
 cp "$build_directory/ffmpeg/ffmpeg$executable_suffix" "$output_directory/ffmpeg$executable_suffix"
