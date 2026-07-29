@@ -76,12 +76,45 @@ jobs:
             exit 1
           fi
 
-      - name: Install minimal FFmpeg build tools
+      - name: Install minimal FFmpeg build tools (Windows)
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            curl
+            make
+            perl
+            tar
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Install minimal FFmpeg build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y nasm
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          build-essential
+          cmake
+          curl
+          nasm
+          ninja-build
+          perl
+          pkg-config
+          xz-utils
+
+      - name: Install minimal FFmpeg build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake nasm ninja pkg-config
 
       - name: Build minimal FFmpeg sidecar
-        if: runner.os == 'Linux'
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: npm run build:ffmpeg:source
 
       - name: Build and Publish

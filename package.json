@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "7.1.1",
+  "version": "7.1.2",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
@@ -14,7 +14,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "build:sidecar": "node scripts/build-hoshidicts.mjs && node scripts/prepare-ffmpeg.mjs",
-    "build:ffmpeg:source": "sh native/ffmpeg-build/build.sh",
+    "build:ffmpeg:source": "node scripts/build-ffmpeg.mjs",
     "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
     "start": "electron-vite preview",
     "dev": "npm run build:sidecar && electron-vite dev --watch",

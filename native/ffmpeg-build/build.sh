@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+# This file and sources.env must use LF line endings; see the repository's
+# .gitattributes. CRLF characters become part of shell variable values.
+
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project_directory=$(CDPATH= cd -- "$script_directory/../.." && pwd)
 
@@ -61,13 +64,34 @@ else
   exit 1
 fi
 
-mkdir -p "$download_directory" "$source_directory" "$build_directory" \
-  "$prefix_directory" "$output_directory"
+ensure_directory() {
+  [ -d "$1" ] || mkdir -p "$1"
+}
+
+for directory in \
+  "$download_directory" \
+  "$source_directory" \
+  "$build_directory" \
+  "$prefix_directory" \
+  "$output_directory"
+do
+  ensure_directory "$directory"
+done
 
 # Some developer environments route the compiler through ccache. Keep its
 # transient files in the build workspace, which also works in restricted CI.
 export CCACHE_DIR=${CCACHE_DIR:-"$work_directory/ccache"}
-mkdir -p "$CCACHE_DIR"
+ensure_directory "$CCACHE_DIR"
+
+# FFmpeg's configure script needs an executable temporary directory. MSYS2's
+# global /tmp can be unavailable in restricted Windows environments.
+if [ "$platform" = win32 ] || [ -z "${TMPDIR:-}" ] || [ ! -w "$TMPDIR" ]; then
+  TMPDIR="$work_directory/tmp"
+fi
+ensure_directory "$TMPDIR"
+TMP=$TMPDIR
+TEMP=$TMPDIR
+export TMPDIR TMP TEMP
 
 fetch() {
   name=$1
@@ -141,6 +165,13 @@ if [ ! -f "$prefix_directory/.zlib-$ZLIB_VERSION" ]; then
     -DZLIB_BUILD_SHARED=OFF \
     -DZLIB_BUILD_STATIC=ON
   touch "$prefix_directory/.zlib-$ZLIB_VERSION"
+fi
+
+# zlib's CMake build calls the static MinGW archive libzs.a, but its installed
+# pkg-config file still advertises -lz. Provide the conventional static name so
+# FFmpeg does not fall through to MSYS2's zlib1.dll import library.
+if [ "$platform" = win32 ] && [ -f "$prefix_directory/lib/libzs.a" ]; then
+  cp "$prefix_directory/lib/libzs.a" "$prefix_directory/lib/libz.a"
 fi
 
 if [ ! -f "$prefix_directory/.lame-$LAME_VERSION" ]; then
@@ -226,6 +257,7 @@ export LDFLAGS="-L$prefix_directory/lib"
 
 case "$platform" in
   darwin) size_ldflags='-Wl,-dead_strip' ;;
+  win32) size_ldflags='-Wl,--gc-sections -static' ;;
   *) size_ldflags='-Wl,--gc-sections' ;;
 esac
 
@@ -234,7 +266,7 @@ if [ "$architecture" = x64 ] && ! command -v nasm >/dev/null 2>&1 && ! command -
   x86asm_flag=--disable-x86asm
 fi
 
-mkdir -p "$build_directory/ffmpeg"
+ensure_directory "$build_directory/ffmpeg"
 (
   cd "$build_directory/ffmpeg"
   "$source_directory/ffmpeg/configure" \
