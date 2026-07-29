@@ -11,7 +11,9 @@ projects. Versions, URLs, and SHA-256 checksums live in `sources.env`.
 ## Build
 
 Install a C/C++ toolchain, CMake, Make or Ninja, Perl, pkg-config, curl, tar,
-xz, and preferably NASM. Then run:
+xz, and preferably NASM. On Windows, install these in an MSYS2 UCRT64
+environment; the npm launcher finds a standard `C:\msys64` installation, or
+the installation selected by `MSYS2_ROOT`. Then run:
 
 ```sh
 npm run build:ffmpeg:source

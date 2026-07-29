@@ -1,0 +1,2 @@
+*.sh text eol=lf
+native/ffmpeg-build/*.env text eol=lf

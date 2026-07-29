@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+# Keep this script LF-only so it can run in MSYS2 as well as Unix shells.
+
 binary=${1:?Usage: verify.sh /path/to/ffmpeg}
 
 require_output() {
