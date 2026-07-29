@@ -23,15 +23,8 @@ jobs:
           - os: ubuntu-latest
             platform: Linux
             architecture: x64
-          - os: macos-15-intel
-            platform: macOS
-            architecture: x64
 
     steps:
-      - name: Install Setuptools for Python
-        if: runner.os == 'macOS'
-        run: pip3 install setuptools --break-system-packages
-
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
@@ -85,23 +78,9 @@ jobs:
         run: npm run build:ffmpeg:source
 
       - name: Build and Publish
-        if: runner.os != 'macOS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run build:publish
-
-      - name: Build and Publish (macOS)
-        if: runner.os == 'macOS'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MAIN_VITE_INTERFACE_URL: ${{ vars.HAYATAN_INTERFACE_URL }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          CSC_LINK: ${{ secrets.APPLE_SIGNING_CERT }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_SIGNING_PASSWORD }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         run: npm run build:publish

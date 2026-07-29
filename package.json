@@ -47,7 +47,7 @@
     "eslint-config-standard-universal": "^1.0.10",
     "native": "github:hayase-app/native",
     "rollup-plugin-license": "^3.7.1",
-    "torrent-client": "github:hayase-app/torrent-client",
+    "torrent-client": "github:hayase-app/torrent-client#98a32231d2453be0293ca3b581860aead469e509",
     "typescript": "^6.0.3",
     "vite": "^7.3.2",
     "vite-plugin-cjs-interop": "^2.4.4",
@@ -55,7 +55,36 @@
   },
   "pnpm": {
     "overrides": {
-      "@vladfrangu/async_event_emitter": "npm:@vladfrangu/async_event_emitter@2.4.6"
+      "@vladfrangu/async_event_emitter": "npm:@vladfrangu/async_event_emitter@2.4.6",
+      "@thaunknown/simple-peer@10.1.1": "file:npm-package-cache/thaunknown-simple-peer-10.1.1.tgz",
+      "@thaunknown/simple-peer@10.1.2": "file:npm-package-cache/thaunknown-simple-peer-10.1.2.tgz",
+      "@thaunknown/simple-websocket@9.1.4": "file:npm-package-cache/thaunknown-simple-websocket-9.1.4.tgz",
+      "@thaunknown/thirty-two@1.0.6": "file:npm-package-cache/thaunknown-thirty-two-1.0.6.tgz",
+      "@thaunknown/yencode@1.5.5": "file:npm-package-cache/thaunknown-yencode-1.5.5.tgz",
+      "abslink@1.2.2": "file:npm-package-cache/abslink-1.2.2.tgz",
+      "block-iterator@1.1.2": "file:npm-package-cache/block-iterator-1.1.2.tgz",
+      "chunk-store-iterator@1.0.4": "file:npm-package-cache/chunk-store-iterator-1.0.4.tgz",
+      "cross-fetch-ponyfill@1.0.3": "file:npm-package-cache/cross-fetch-ponyfill-1.0.3.tgz",
+      "fast-readable-async-iterator@1.1.2": "file:npm-package-cache/fast-readable-async-iterator-1.1.2.tgz",
+      "fast-readable-async-iterator@2.0.0": "file:npm-package-cache/fast-readable-async-iterator-2.0.0.tgz",
+      "fsa-chunk-store@1.3.0": "file:npm-package-cache/fsa-chunk-store-1.3.0.tgz",
+      "join-async-iterator@1.1.1": "file:npm-package-cache/join-async-iterator-1.1.1.tgz",
+      "nntp-js@1.0.5": "file:npm-package-cache/nntp-js-1.0.5.tgz",
+      "nzb-file@1.1.18": "file:npm-package-cache/nzb-file-1.1.18.tgz",
+      "nzb-parser@1.0.4": "file:npm-package-cache/nzb-parser-1.0.4.tgz",
+      "throughput@1.0.2": "file:npm-package-cache/throughput-1.0.2.tgz",
+      "torrent-client>ebml-iterator": "-",
+      "torrent-client>ebml-stream": "-",
+      "torrent-client>matroska-metadata": "-",
+      "uint8-util@2.3.2": "file:npm-package-cache/uint8-util-2.3.2.tgz",
+      "webrtc-polyfill@1.2.2": "file:npm-package-cache/webrtc-polyfill-1.2.2.tgz"
+    },
+    "packageExtensions": {
+      "torrent-client@1.0.0": {
+        "dependencies": {
+          "fast-readable-async-iterator": "^1.1.2"
+        }
+      }
     }
   },
   "dependencies": {
