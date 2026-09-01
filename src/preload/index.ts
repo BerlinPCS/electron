@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import type { MiningDictionaryEvent } from '../main/hoshidicts/types.ts'
 import type IPC from '../main/ipc.ts'
+import type { ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 import type { MiningAnkiEvent } from '../main/mining-anki.ts'
 import type { Remote } from 'abslink'
 import type { Native } from 'native'
@@ -137,6 +138,9 @@ const native: Partial<Native> = {
   miningAnkiCheckDuplicate: request => main.miningAnkiCheckDuplicate(request),
   miningAnkiAddNote: request => main.miningAnkiAddNote(request),
   miningAnkiShowNotes: request => main.miningAnkiShowNotes(request),
+  immersionRecordSegment: (request: ImmersionSegment) => main.immersionRecordSegment(request),
+  immersionMigrateCurrentDayBaseline: (request: ImmersionDailyBaseline) => main.immersionMigrateCurrentDayBaseline(request),
+  immersionState: () => main.immersionState(),
   onMiningAnkiEvent: (callback) => {
     const listener = (_event: IpcRendererEvent, data: MiningAnkiEvent) => callback(data)
     ipcRenderer.on('mining-anki-event', listener)

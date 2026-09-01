@@ -26,6 +26,7 @@ import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
 import store from './store.ts'
 import Updater from './updater.ts'
+import { ImmersionOutbox } from './immersion.ts'
 
 import type { Messageable } from 'abslink'
 
@@ -72,6 +73,7 @@ function setCors (record?: Record<string, string[]>, credentials = false) {
 }
 
 export default class App {
+  immersion = new ImmersionOutbox(join(app.getPath('userData'), 'immersion.sqlite3'))
   torrentProcess = utilityProcess.fork(forkPath, [], {
     stdio: ['ignore', 'pipe', 'pipe'],
     serviceName: 'Hayatan Torrent Client'
@@ -562,6 +564,7 @@ export default class App {
     try {
       await this.hoshidicts.shutdown()
     } catch {}
+    this.immersion.close()
     this.miningAnki.stopMonitoring()
     if (!this.updater.install(forceRunAfter)) app.quit()
   }

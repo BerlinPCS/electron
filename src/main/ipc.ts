@@ -22,6 +22,7 @@ import type {
   MiningAnkiShowNotesRequest
 } from './mining-anki.ts'
 import type { AuthResponse, SessionMetadata, ClientSettings } from 'native'
+import type { ImmersionDailyBaseline, ImmersionSegment } from './immersion.ts'
 
 const WHITELISTED_URLS = [
   'https://anilist.co/',
@@ -325,6 +326,10 @@ export default class IPC {
   miningAnkiShowNotes (request: MiningAnkiShowNotesRequest) {
     return this.app.miningAnki.showNotes(request)
   }
+
+  immersionRecordSegment (request: ImmersionSegment) { return this.app.immersion.recordSegment(request) }
+  immersionMigrateCurrentDayBaseline (request: ImmersionDailyBaseline) { return this.app.immersion.migrateCurrentDayBaseline(request) }
+  immersionState () { return this.app.immersion.state() }
 
   setAngle (angle: string) {
     const current = store.get('angle')
