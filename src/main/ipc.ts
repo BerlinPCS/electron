@@ -15,6 +15,7 @@ import store from './store'
 import type App from './app'
 import type Discord from './discord'
 import type { MiningDictionaryKind, MiningDictionaryLookupRequest } from './hoshidicts/types.ts'
+import type { ImmersionConnectionPatch, ImmersionDailyBaseline, ImmersionSegment } from './immersion.ts'
 import type {
   MiningAnkiAddRequest,
   MiningAnkiDuplicateRequest,
@@ -22,7 +23,6 @@ import type {
   MiningAnkiShowNotesRequest
 } from './mining-anki.ts'
 import type { AuthResponse, SessionMetadata, ClientSettings } from 'native'
-import type { ImmersionDailyBaseline, ImmersionSegment } from './immersion.ts'
 
 const WHITELISTED_URLS = [
   'https://anilist.co/',
@@ -330,6 +330,8 @@ export default class IPC {
   immersionRecordSegment (request: ImmersionSegment) { return this.app.immersion.recordSegment(request) }
   immersionMigrateCurrentDayBaseline (request: ImmersionDailyBaseline) { return this.app.immersion.migrateCurrentDayBaseline(request) }
   immersionState () { return this.app.immersion.state() }
+  immersionUpdateConnection (patch: ImmersionConnectionPatch) { return this.app.immersion.updateConnection(patch) }
+  immersionTestConnection () { return this.app.immersion.testConnection() }
 
   setAngle (angle: string) {
     const current = store.get('angle')

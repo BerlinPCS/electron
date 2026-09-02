@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+
 import { safeStorage } from 'electron'
 
 import { mergeRanges, splitAtBerlinMidnight } from './immersion-ranges.ts'
@@ -25,17 +26,42 @@ export interface ImmersionDailyBaseline {
   standardSeconds: number
 }
 
+export interface ImmersionConnectionPatch {
+  endpoint: string
+  token?: string
+  clearToken?: boolean
+}
+
+export interface ImmersionConnectionState {
+  pending: number
+  rejected: number
+  configured: boolean
+  endpoint: string
+  tokenConfigured: boolean
+}
+
+interface StoredConnection {
+  endpoint: string
+}
+
 export class ImmersionOutbox {
   private readonly db: DatabaseSync
   private sending = false
-  private timer?: ReturnType<typeof setInterval>
+  private readonly timer?: ReturnType<typeof setInterval>
 
-  private readonly endpoint: string
-  private readonly token: string
+  private endpoint: string
+  private token: string
+  private readonly configPath: string
+  private readonly tokenPath: string
 
   constructor (path: string, endpoint = process.env.ANKILOCK_IMMERSION_URL ?? '', token = process.env.ANKILOCK_IMMERSION_TOKEN ?? '') {
-    this.endpoint = endpoint
-    this.token = loadToken(dirname(path), token)
+    const directory = dirname(path)
+    this.configPath = join(directory, 'immersion-connection.json')
+    this.tokenPath = join(directory, 'immersion-token.bin')
+    const stored = loadConnection(this.configPath)
+    this.endpoint = normalizeEndpoint(endpoint || stored.endpoint)
+    this.token = loadToken(this.tokenPath, token)
+    if (endpoint) persistConnection(this.configPath, { endpoint: this.endpoint })
     this.db = new DatabaseSync(path)
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS outbox (
@@ -60,8 +86,8 @@ export class ImmersionOutbox {
     if (!outboxColumns.some(column => column.name === 'next_attempt_at')) {
       this.db.exec('ALTER TABLE outbox ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0')
     }
-    this.timer = setInterval(() => { void this.flush() }, 15_000)
-    void this.flush()
+    this.timer = setInterval(() => { this.flush().catch(() => undefined) }, 15_000)
+    this.flush().catch(() => undefined)
   }
 
   recordSegment (input: ImmersionSegment) {
@@ -75,10 +101,15 @@ export class ImmersionOutbox {
       const ratioEnd = (end.getTime() - startedAt.getTime()) / input.wallMilliseconds
       const contentSpan = input.contentEndSeconds - input.contentStartSeconds
       const payload = {
-        event_id: randomUUID(), external_media_id: input.externalMediaId,
-        display_name: input.displayName, event_type: 'watch_segment', occurred_at: start.toISOString(),
-        wall_milliseconds: end.getTime() - start.getTime(), mode: input.mode,
-        episode: input.episode, characters: 0,
+        event_id: randomUUID(),
+        external_media_id: input.externalMediaId,
+        display_name: input.displayName,
+        event_type: 'watch_segment',
+        occurred_at: start.toISOString(),
+        wall_milliseconds: end.getTime() - start.getTime(),
+        mode: input.mode,
+        episode: input.episode,
+        characters: 0,
         metadata: {
           content_start_seconds: input.contentStartSeconds + contentSpan * ratioStart,
           content_end_seconds: input.contentStartSeconds + contentSpan * ratioEnd,
@@ -91,7 +122,7 @@ export class ImmersionOutbox {
         .run(payload.event_id, JSON.stringify(payload), new Date().toISOString())
     }
     this.updateCoverage(input)
-    void this.flush()
+    this.flush().catch(() => undefined)
     return firstEventId
   }
 
@@ -127,16 +158,48 @@ export class ImmersionOutbox {
       this.db.exec('ROLLBACK')
       throw error
     }
-    void this.flush()
+    this.flush().catch(() => undefined)
     return true
   }
 
-  state () {
+  state (): ImmersionConnectionState {
     return {
       pending: Number((this.db.prepare('SELECT COUNT(*) count FROM outbox').get() as { count: number }).count),
       rejected: Number((this.db.prepare('SELECT COUNT(*) count FROM dead_letter').get() as { count: number }).count),
-      configured: Boolean(this.endpoint && this.token)
+      configured: Boolean(this.endpoint && this.token),
+      endpoint: this.endpoint,
+      tokenConfigured: Boolean(this.token)
     }
+  }
+
+  updateConnection (patch: ImmersionConnectionPatch) {
+    const endpoint = normalizeEndpoint(patch.endpoint)
+    if (patch.clearToken && patch.token) throw new Error('Cannot replace and clear the token together')
+    if (patch.clearToken) {
+      rmSync(this.tokenPath, { force: true })
+      this.token = ''
+    } else if (patch.token) {
+      this.token = storeToken(this.tokenPath, patch.token)
+    }
+    this.endpoint = endpoint
+    persistConnection(this.configPath, { endpoint })
+    this.flush().catch(() => undefined)
+    return this.state()
+  }
+
+  async testConnection () {
+    if (!this.endpoint || !this.token) throw new Error('Configure both the backend URL and source token first')
+    const response = await fetch(`${this.endpoint}/v1/immersion/sources/hayatan/events`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [] })
+    })
+    if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}`)
+    const result = await response.json() as { accepted?: unknown[], duplicates?: unknown[], rejected?: unknown[] }
+    if (!Array.isArray(result.accepted) || !Array.isArray(result.duplicates) || !Array.isArray(result.rejected)) {
+      throw new Error('Backend returned an unexpected response')
+    }
+    return { ok: true, message: 'Authenticated with the immersion backend.' }
   }
 
   async flush () {
@@ -147,7 +210,8 @@ export class ImmersionOutbox {
         .all(Date.now()) as Array<{ event_id: string, payload_json: string, attempts: number }>
       if (!rows.length) return
       const response = await fetch(`${this.endpoint.replace(/\/$/, '')}/v1/immersion/sources/hayatan/events`, {
-        method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: rows.map(row => JSON.parse(row.payload_json)) })
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -201,10 +265,15 @@ export class ImmersionOutbox {
       .run(input.externalMediaId, input.episode, input.durationSeconds, JSON.stringify(ranges), Number(completed))
     if (completed && !row?.completion_emitted) {
       const completion = {
-        event_id: randomUUID(), external_media_id: input.externalMediaId,
-        display_name: input.displayName, event_type: 'episode_completed',
-        occurred_at: input.occurredAt ?? new Date().toISOString(), wall_milliseconds: 0,
-        mode: input.mode, episode: input.episode, characters: 0,
+        event_id: randomUUID(),
+        external_media_id: input.externalMediaId,
+        display_name: input.displayName,
+        event_type: 'episode_completed',
+        occurred_at: input.occurredAt ?? new Date().toISOString(),
+        wall_milliseconds: 0,
+        mode: input.mode,
+        episode: input.episode,
+        characters: 0,
         metadata: { coverage_seconds: covered, duration_seconds: input.durationSeconds }
       }
       this.db.prepare('INSERT INTO outbox(event_id,payload_json,created_at) VALUES(?,?,?)')
@@ -213,16 +282,52 @@ export class ImmersionOutbox {
   }
 }
 
-function loadToken (directory: string, supplied: string) {
-  const tokenPath = join(directory, 'immersion-token.bin')
-  if (supplied && safeStorage.isEncryptionAvailable()) {
-    writeFileSync(tokenPath, safeStorage.encryptString(supplied), { mode: 0o600 })
-    return supplied
-  }
+function loadToken (tokenPath: string, supplied: string) {
+  if (supplied) return storeToken(tokenPath, supplied)
   if (!supplied && safeStorage.isEncryptionAvailable() && existsSync(tokenPath)) {
     return safeStorage.decryptString(readFileSync(tokenPath))
   }
   return supplied
+}
+
+function storeToken (tokenPath: string, supplied: string) {
+  const token = supplied.trim()
+  if (!token) throw new Error('The source token cannot be empty')
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure token storage is unavailable')
+  writePrivateFile(tokenPath, safeStorage.encryptString(token))
+  return token
+}
+
+function loadConnection (path: string): StoredConnection {
+  if (!existsSync(path)) return { endpoint: '' }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<StoredConnection>
+    return { endpoint: typeof parsed.endpoint === 'string' ? parsed.endpoint : '' }
+  } catch {
+    return { endpoint: '' }
+  }
+}
+
+function persistConnection (path: string, connection: StoredConnection) {
+  writePrivateFile(path, JSON.stringify(connection, null, 2) + '\n')
+}
+
+function writePrivateFile (path: string, contents: string | Uint8Array) {
+  const temporary = `${path}.tmp`
+  writeFileSync(temporary, contents, { mode: 0o600 })
+  renameSync(temporary, path)
+}
+
+function normalizeEndpoint (value: string) {
+  const endpoint = value.trim().replace(/\/+$/, '')
+  if (!endpoint) return ''
+  const parsed = new URL(endpoint)
+  const localDevelopment = parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname)
+  if (parsed.protocol !== 'https:' && !localDevelopment) throw new Error('The backend URL must use HTTPS')
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+    throw new Error('Enter only the backend origin, without credentials, a path, query, or fragment')
+  }
+  return parsed.origin
 }
 
 function validateSegment (input: ImmersionSegment) {

@@ -6,6 +6,7 @@ import type {
   MiningDictionaryLookupResult,
   MiningDictionaryState
 } from '../main/hoshidicts/types.ts'
+import type { ImmersionConnectionPatch, ImmersionConnectionState, ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 import type { HayaseMigrationState } from '../main/legacy-migration.ts'
 import type {
   MiningAnkiAddRequest,
@@ -20,7 +21,6 @@ import type {
   MiningAnkiState
 } from '../main/mining-anki.ts'
 import type { MiningLocalAudioState } from '../main/mining-audio.ts'
-import type { ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 
 declare module 'native' {
   interface Native {
@@ -49,7 +49,9 @@ declare module 'native' {
     miningAnkiShowNotes: (request: MiningAnkiShowNotesRequest) => Promise<MiningAnkiShowNotesResult>
     immersionRecordSegment: (request: ImmersionSegment) => Promise<string>
     immersionMigrateCurrentDayBaseline: (request: ImmersionDailyBaseline) => Promise<boolean>
-    immersionState: () => Promise<{ pending: number, rejected: number, configured: boolean }>
+    immersionState: () => Promise<ImmersionConnectionState>
+    immersionUpdateConnection: (patch: ImmersionConnectionPatch) => Promise<ImmersionConnectionState>
+    immersionTestConnection: () => Promise<{ ok: boolean, message: string }>
     onMiningAnkiEvent: (callback: (event: MiningAnkiEvent) => void) => () => void
     onMiningDictionaryEvent: (callback: (event: MiningDictionaryEvent) => void) => () => void
   }

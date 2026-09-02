@@ -4,8 +4,8 @@ import { wrap as wrapPort } from 'abslink/w3c'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 import type { MiningDictionaryEvent } from '../main/hoshidicts/types.ts'
+import type { ImmersionConnectionPatch, ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 import type IPC from '../main/ipc.ts'
-import type { ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 import type { MiningAnkiEvent } from '../main/mining-anki.ts'
 import type { Remote } from 'abslink'
 import type { Native } from 'native'
@@ -141,6 +141,8 @@ const native: Partial<Native> = {
   immersionRecordSegment: (request: ImmersionSegment) => main.immersionRecordSegment(request),
   immersionMigrateCurrentDayBaseline: (request: ImmersionDailyBaseline) => main.immersionMigrateCurrentDayBaseline(request),
   immersionState: () => main.immersionState(),
+  immersionUpdateConnection: (patch: ImmersionConnectionPatch) => main.immersionUpdateConnection(patch),
+  immersionTestConnection: () => main.immersionTestConnection(),
   onMiningAnkiEvent: (callback) => {
     const listener = (_event: IpcRendererEvent, data: MiningAnkiEvent) => callback(data)
     ipcRenderer.on('mining-anki-event', listener)
