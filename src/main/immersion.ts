@@ -191,6 +191,7 @@ export class ImmersionOutbox {
     if (!this.endpoint || !this.token) throw new Error('Configure both the backend URL and source token first')
     const response = await fetch(`${this.endpoint}/v1/immersion/sources/hayatan/events`, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ events: [] })
     })
@@ -211,6 +212,7 @@ export class ImmersionOutbox {
       if (!rows.length) return
       const response = await fetch(`${this.endpoint.replace(/\/$/, '')}/v1/immersion/sources/hayatan/events`, {
         method: 'POST',
+        signal: AbortSignal.timeout(30_000),
         headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: rows.map(row => JSON.parse(row.payload_json)) })
       })
