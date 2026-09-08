@@ -143,6 +143,8 @@ const native: Partial<Native> = {
   immersionState: () => main.immersionState(),
   immersionUpdateConnection: (patch: ImmersionConnectionPatch) => main.immersionUpdateConnection(patch),
   immersionTestConnection: () => main.immersionTestConnection(),
+  torrentProcessState: () => main.torrentProcessState(),
+  setDedicatedTorrentProcess: (enabled: boolean) => main.setDedicatedTorrentProcess(enabled),
   onMiningAnkiEvent: (callback) => {
     const listener = (_event: IpcRendererEvent, data: MiningAnkiEvent) => callback(data)
     ipcRenderer.on('mining-anki-event', listener)

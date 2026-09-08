@@ -10,6 +10,7 @@ const DEFAULTS = {
   angle: 'default',
   player: '',
   torrentPath: '',
+  dedicatedTorrentProcess: false,
   doh: '',
   setupVersion: 0,
   miningAnki: DEFAULT_MINING_ANKI_SETTINGS,

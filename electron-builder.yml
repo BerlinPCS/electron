@@ -1,5 +1,6 @@
 appId: com.github.berlinpcs.hayatan
 productName: Hayatan
+afterPack: scripts/package-torrent-runtime.cjs
 electronFuses:
   resetAdHocDarwinSignature: false
   runAsNode: false

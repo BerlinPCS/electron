@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import { basename, dirname, extname } from 'node:path'
 
-import { app, BrowserWindow, dialog, shell, type UtilityProcess, ipcMain, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, shell, ipcMain, systemPreferences } from 'electron'
 import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
@@ -11,6 +11,7 @@ import { parseAniListAuthResponse } from './auth.ts'
 import { HoshidictsError } from './hoshidicts/client.ts'
 import { getHayaseMigrationState, scheduleHayaseMigration } from './legacy-migration.ts'
 import store from './store'
+import { torrentExecutable, torrentRuntimeAvailable } from './torrent/process.ts'
 
 import type App from './app'
 import type Discord from './discord'
@@ -45,7 +46,7 @@ export default class IPC {
   hideToTray = false
   discord
   corsURLS: string[] = []
-  constructor (window: App, torrentProcess: UtilityProcess, discord: Discord) {
+  constructor (window: App, torrentProcess: App['torrentProcess'], discord: Discord) {
     this.app = window
     this.torrentProcess = torrentProcess
     this.discord = discord
@@ -192,6 +193,22 @@ export default class IPC {
 
     store.set('player', path)
     return basename(path, extname(path))
+  }
+
+  torrentProcessState () {
+    return {
+      enabled: store.data.dedicatedTorrentProcess === true,
+      active: this.app.dedicatedTorrentActive,
+      available: torrentRuntimeAvailable(),
+      executable: torrentExecutable()
+    }
+  }
+
+  setDedicatedTorrentProcess (enabled: boolean) {
+    if (typeof enabled !== 'boolean') throw new Error('Expected a boolean')
+    if (enabled && !torrentRuntimeAvailable()) throw new Error('This build does not include the dedicated torrent runtime.')
+    store.set('dedicatedTorrentProcess', enabled)
+    return this.torrentProcessState()
   }
 
   updateSettings (settings: ClientSettings = store.data.torrentSettings) {
