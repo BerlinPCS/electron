@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "7.1.3",
+  "version": "7.1.4",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
