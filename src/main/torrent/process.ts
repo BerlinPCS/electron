@@ -22,4 +22,3 @@ export function startTorrentProcess (script: string, dedicated: boolean) {
   if (!torrentRuntimeAvailable()) throw new Error('Dedicated torrent runtime is missing. Reinstall Hayatan or disable dedicated torrent mode.')
   return new DedicatedTorrentProcess(script, torrentExecutable())
 }
-
