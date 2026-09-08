@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { mergeRanges, splitAtBerlinMidnight } from '../src/main/immersion-ranges.ts'
+import { hasWatchedEnding, mergeRanges, splitAtBerlinMidnight } from '../src/main/immersion-ranges.ts'
 
 test('merges overlapping replay ranges without double-counting coverage', () => {
   assert.deepEqual(mergeRanges([[0, 10], [5, 12], [20, 30], [21, 24]]), [[0, 12], [20, 30]])
@@ -36,4 +36,13 @@ test('splits wall time at the Europe Berlin day boundary', () => {
   assert.equal(parts.length, 2)
   assert.equal(parts[0][1].toISOString(), '2026-08-31T22:00:00.000Z')
   assert.equal(parts[1][0].toISOString(), '2026-08-31T22:00:00.000Z')
+})
+
+
+test('a resumed episode can complete from its watched ending, but seek points cannot', () => {
+  assert.equal(hasWatchedEnding([[1200, 1300]], 1440), true)
+  assert.equal(hasWatchedEnding([[1400, 1405]], 1440), false)
+  assert.equal(hasWatchedEnding([[0, 0]], 1440), false)
+  assert.equal(hasWatchedEnding([[1200, 1300]], 0), false)
+  assert.equal(hasWatchedEnding([[600, 900]], 1440), false)
 })

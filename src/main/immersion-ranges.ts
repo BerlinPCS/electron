@@ -30,3 +30,10 @@ function berlinDateKey (date: Date) {
     timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(date)
 }
+
+// Observed playback into the final 10% (at most three minutes), including a
+// resumed episode. A seek-only point or a tiny mining sample is not completion.
+export function hasWatchedEnding (ranges: Array<[number, number]>, duration: number) {
+  return Number.isFinite(duration) && duration > 0 && ranges.some(([start, end]) =>
+    end - start >= Math.min(30, duration * 0.25) && end >= duration - Math.min(180, duration * 0.1))
+}
