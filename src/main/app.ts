@@ -5,7 +5,7 @@ import process, { platform } from 'node:process'
 import { electronApp, is } from '@electron-toolkit/utils'
 import electronShutdownHandler from '@paymoapp/electron-shutdown-handler'
 import { expose } from 'abslink/electron'
-import { BrowserWindow, MessageChannelMain, app, dialog, ipcMain, powerMonitor, shell, utilityProcess, Tray, Menu, protocol, nativeImage, session, nativeTheme, webFrame } from 'electron' // type NativeImage, Notification, nativeImage,
+import { BrowserWindow, MessageChannelMain, app, dialog, ipcMain, powerMonitor, shell, Tray, Menu, protocol, nativeImage, session, nativeTheme, webFrame } from 'electron' // type NativeImage, Notification, nativeImage,
 import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
@@ -25,6 +25,7 @@ import { MAX_MINING_MEDIA_BYTES, MiningMediaEncoder, resolveMiningMediaExecutabl
 import Plugins from './plugins.ts'
 import Protocol from './protocol.ts'
 import store from './store.ts'
+import { startTorrentProcess } from './torrent/process.ts'
 import Updater from './updater.ts'
 import { ImmersionOutbox } from './immersion.ts'
 
@@ -74,10 +75,8 @@ function setCors (record?: Record<string, string[]>, credentials = false) {
 
 export default class App {
   immersion = new ImmersionOutbox(join(app.getPath('userData'), 'immersion.sqlite3'))
-  torrentProcess = utilityProcess.fork(forkPath, [], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    serviceName: 'Hayatan Torrent Client'
-  })
+  dedicatedTorrentActive = store.data.dedicatedTorrentProcess === true
+  torrentProcess = startTorrentProcess(forkPath, this.dedicatedTorrentActive)
 
   mainWindow = new BrowserWindow({
     width: 1600,
@@ -242,8 +241,10 @@ export default class App {
     // not insanely safe, but fixes VPNs breaking w2g
     this.mainWindow.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces')
 
-    this.torrentProcess.stderr?.on('data', d => console.error('' + d))
-    this.torrentProcess.stdout?.on('data', d => console.log('' + d))
+    const torrentStderr: NodeJS.ReadableStream | null = this.torrentProcess.stderr
+    const torrentStdout: NodeJS.ReadableStream | null = this.torrentProcess.stdout
+    torrentStderr?.on('data', d => console.error('' + d))
+    torrentStdout?.on('data', d => console.log('' + d))
     // if (TRANSPARENCY) {
     // // Transparency fixes, window is resizable when fullscreen/maximized
     //   this.mainWindow.on('enter-html-full-screen', () => {
@@ -347,7 +348,12 @@ export default class App {
     })
 
     this.mainWindow.on('closed', () => this.destroy())
-    this.torrentProcess.on('exit', () => this.destroy())
+    this.torrentProcess.on('exit', () => {
+      if (this.dedicatedTorrentActive && !this.destroyed) {
+        dialog.showErrorBox('Torrent process stopped', 'The dedicated torrent process stopped unexpectedly. Hayatan will close without switching to the default process. Check the logs or reinstall the app before retrying.')
+      }
+      this.destroy()
+    })
     ipcMain.on('close', () => this.destroy())
     app.on('before-quit', e => {
       if (this.destroyed) return
@@ -559,8 +565,9 @@ export default class App {
     try {
       this.torrentProcess.postMessage({ id: 'destroy' })
       await once(this.torrentProcess, 'exit', { signal: AbortSignal.timeout(5000) })
+    } catch {} finally {
       this.torrentProcess.kill()
-    } catch {}
+    }
     try {
       await this.hoshidicts.shutdown()
     } catch {}

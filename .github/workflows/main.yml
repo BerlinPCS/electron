@@ -90,8 +90,8 @@ jobs:
 
           node scripts/install-ffmpeg-release.mjs "$download_directory" "$FFMPEG_PLATFORM"
 
-      - name: Test updater and immersion accounting
-        run: node --experimental-transform-types --test test/updater.test.mjs test/immersion-ranges.test.mjs
+      - name: Test updater, immersion accounting and torrent IPC
+        run: node --experimental-transform-types --test test/updater.test.mjs test/immersion-ranges.test.mjs test/torrent-supervisor.test.mjs test/torrent-transport.test.mjs
 
       - name: Build and Publish
         env:
@@ -100,3 +100,7 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run build:publish
+
+      - name: Verify packaged Windows torrent runtime
+        if: matrix.platform == 'Windows'
+        run: node scripts/verify-torrent-runtime.mjs dist/win-unpacked/resources
