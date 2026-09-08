@@ -6,6 +6,7 @@ const { mkdtempSync, readFileSync, statSync, rmSync } = require('node:fs')
 const { createServer } = require('node:http')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
+const { DatabaseSync } = require('node:sqlite')
 
 const { app, safeStorage } = require('electron')
 
@@ -33,6 +34,23 @@ app.whenReady().then(async () => {
   const endpoint = `http://127.0.0.1:${server.address().port}`
   let outbox
   try {
+    // Isolated upgrade fixture: preserve pre-existing episode evidence and let
+    // already known shows continue reporting without another threshold.
+    const legacyPath = join(directory, 'legacy.sqlite3')
+    const legacy = new DatabaseSync(legacyPath)
+    legacy.exec(`CREATE TABLE episode_coverage(external_media_id TEXT NOT NULL, episode INTEGER NOT NULL,
+      duration_seconds REAL NOT NULL, ranges_json TEXT NOT NULL, completion_emitted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(external_media_id,episode));
+      INSERT INTO episode_coverage VALUES('known',1,1440,'[[0,100]]',0)`)
+    const before = legacy.prepare('SELECT * FROM episode_coverage').all()
+    legacy.close()
+    const upgraded = new ImmersionOutbox(legacyPath, '', '')
+    upgraded.close()
+    const verify = new DatabaseSync(legacyPath)
+    assert.deepEqual(verify.prepare('SELECT * FROM episode_coverage').all(), before)
+    assert.equal(verify.prepare("SELECT qualified FROM media_reporting WHERE external_media_id='known'").get().qualified, 1)
+    assert.equal(verify.prepare('PRAGMA integrity_check').get().integrity_check, 'ok')
+    verify.close()
     assert.equal(safeStorage.isEncryptionAvailable(), true)
     outbox = new ImmersionOutbox(join(directory, 'immersion.sqlite3'), '', '')
     assert.equal(outbox.state().configured, false)
@@ -64,14 +82,42 @@ app.whenReady().then(async () => {
     outbox.close()
     outbox = new ImmersionOutbox(join(directory, 'immersion.sqlite3'), '', '')
     assert.equal(outbox.state().pending, 1, 'Pending statistics survive restart')
+    // New media remains local through restart and exactly twenty minutes.
     outbox.updateConnection({ endpoint, token: expectedToken })
+    await outbox.flush()
+    assert.equal(received.length, 0)
+    for (let i = 0; i < 79; i++) outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 2, mode: 'standard', wallMilliseconds: 15000, contentStartSeconds: 0, contentEndSeconds: 0, durationSeconds: 1440 })
+    outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 2, mode: 'mining', wallMilliseconds: 10000, contentStartSeconds: 0, contentEndSeconds: 0, durationSeconds: 1440 })
+    await outbox.flush()
+    assert.equal(received.length, 0, 'Exactly 20 minutes does not qualify')
+    outbox.close()
+    outbox = new ImmersionOutbox(join(directory, 'immersion.sqlite3'), '', '')
+    await outbox.flush()
+    assert.equal(received.length, 0, 'Restart does not release held media')
+    outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 2, mode: 'mining', wallMilliseconds: 1000, contentStartSeconds: 0, contentEndSeconds: 0, durationSeconds: 1440 })
     for (let count = 0; count < 100 && outbox.state().pending; count++) {
       await new Promise(resolve => setTimeout(resolve, 20))
     }
     assert.equal(outbox.state().pending, 0)
-    assert.equal(received.length, 1)
+    assert.equal(received.length, 82)
     assert.equal(received[0].event_id, eventId)
-    console.log('PASS: encrypted storage, file permissions, restart persistence, empty test request, token rotation/removal, URL validation, offline event recovery and acknowledgement')
+    assert.equal(received.reduce((sum, event) => sum + event.wall_milliseconds, 0), 1201000)
+    // Qualifying is permanent, and observed ending completion survives restart/replay.
+    for (let position = 1250; position < 1300; position += 5) outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 4, mode: 'mining', wallMilliseconds: 5000, contentStartSeconds: position, contentEndSeconds: position + 5, durationSeconds: 1440 })
+    for (let count = 0; count < 100 && outbox.state().pending; count++) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      await outbox.flush()
+    }
+    assert.equal(received.filter(event => event.event_type === 'episode_completed').length, 1)
+    outbox.close()
+    outbox = new ImmersionOutbox(join(directory, 'immersion.sqlite3'), '', '')
+    outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 4, mode: 'standard', wallMilliseconds: 5000, contentStartSeconds: 1295, contentEndSeconds: 1300, durationSeconds: 1440 })
+    for (let count = 0; count < 100 && outbox.state().pending; count++) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      await outbox.flush()
+    }
+    assert.equal(received.filter(event => event.event_type === 'episode_completed').length, 1)
+    console.log('PASS: reporting threshold, cross-mode total, held restart, release original events, resumed completion and replay dedupe; encrypted storage, file permissions, restart persistence, empty test request, token rotation/removal, URL validation, offline event recovery and acknowledgement')
   } finally {
     outbox?.close()
     await new Promise(resolve => server.close(resolve))

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { safeStorage } from 'electron'
 
-import { mergeRanges, splitAtBerlinMidnight } from './immersion-ranges.ts'
+import { hasWatchedEnding, mergeRanges, splitAtBerlinMidnight } from './immersion-ranges.ts'
 
 export interface ImmersionSegment {
   externalMediaId: string
@@ -76,6 +76,10 @@ export class ImmersionOutbox {
       CREATE TABLE IF NOT EXISTS migration_markers (
         marker TEXT PRIMARY KEY, completed_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS media_reporting (
+        external_media_id TEXT PRIMARY KEY, wall_milliseconds REAL NOT NULL DEFAULT 0,
+        qualified INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE IF NOT EXISTS episode_coverage (
         external_media_id TEXT NOT NULL, episode INTEGER NOT NULL,
         duration_seconds REAL NOT NULL, ranges_json TEXT NOT NULL,
@@ -85,6 +89,20 @@ export class ImmersionOutbox {
     const outboxColumns = this.db.prepare('PRAGMA table_info(outbox)').all() as Array<{ name: string }>
     if (!outboxColumns.some(column => column.name === 'next_attempt_at')) {
       this.db.exec('ALTER TABLE outbox ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0')
+    }
+    // Existing media must keep reporting normally after an upgrade. Seed once;
+    // held events from this version must never qualify merely because of a restart.
+    if (!this.db.prepare("SELECT 1 FROM migration_markers WHERE marker='media-reporting-v1'").get()) {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        this.db.exec(`INSERT OR IGNORE INTO media_reporting(external_media_id,qualified)
+          SELECT external_media_id,1 FROM episode_coverage;
+          INSERT OR IGNORE INTO media_reporting(external_media_id,qualified)
+          SELECT json_extract(payload_json,'$.external_media_id'),1 FROM outbox;`)
+        this.db.prepare('INSERT INTO migration_markers(marker,completed_at) VALUES(?,?)')
+          .run('media-reporting-v1', new Date().toISOString())
+        this.db.exec('COMMIT')
+      } catch (error) { this.db.exec('ROLLBACK'); throw error }
     }
     this.timer = setInterval(() => { this.flush().catch(() => undefined) }, 15_000)
     this.flush().catch(() => undefined)
@@ -96,32 +114,41 @@ export class ImmersionOutbox {
     const startedAt = new Date(endedAt.getTime() - input.wallMilliseconds)
     const parts = splitAtBerlinMidnight(startedAt, endedAt)
     let firstEventId = ''
-    for (const [start, end] of parts) {
-      const ratioStart = (start.getTime() - startedAt.getTime()) / input.wallMilliseconds
-      const ratioEnd = (end.getTime() - startedAt.getTime()) / input.wallMilliseconds
-      const contentSpan = input.contentEndSeconds - input.contentStartSeconds
-      const payload = {
-        event_id: randomUUID(),
-        external_media_id: input.externalMediaId,
-        display_name: input.displayName,
-        event_type: 'watch_segment',
-        occurred_at: start.toISOString(),
-        wall_milliseconds: end.getTime() - start.getTime(),
-        mode: input.mode,
-        episode: input.episode,
-        characters: 0,
-        metadata: {
-          content_start_seconds: input.contentStartSeconds + contentSpan * ratioStart,
-          content_end_seconds: input.contentStartSeconds + contentSpan * ratioEnd,
-          duration_seconds: input.durationSeconds,
-          sample_clamped: Boolean(input.sampleClamped)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const [start, end] of parts) {
+        const ratioStart = (start.getTime() - startedAt.getTime()) / input.wallMilliseconds
+        const ratioEnd = (end.getTime() - startedAt.getTime()) / input.wallMilliseconds
+        const contentSpan = input.contentEndSeconds - input.contentStartSeconds
+        const payload = {
+          event_id: randomUUID(),
+          external_media_id: input.externalMediaId,
+          display_name: input.displayName,
+          event_type: 'watch_segment',
+          occurred_at: start.toISOString(),
+          wall_milliseconds: end.getTime() - start.getTime(),
+          mode: input.mode,
+          episode: input.episode,
+          characters: 0,
+          metadata: {
+            content_start_seconds: input.contentStartSeconds + contentSpan * ratioStart,
+            content_end_seconds: input.contentStartSeconds + contentSpan * ratioEnd,
+            duration_seconds: input.durationSeconds,
+            sample_clamped: Boolean(input.sampleClamped)
+          }
         }
+        if (!firstEventId) firstEventId = payload.event_id
+        this.db.prepare('INSERT INTO outbox(event_id,payload_json,created_at) VALUES(?,?,?)')
+          .run(payload.event_id, JSON.stringify(payload), new Date().toISOString())
       }
-      if (!firstEventId) firstEventId = payload.event_id
-      this.db.prepare('INSERT INTO outbox(event_id,payload_json,created_at) VALUES(?,?,?)')
-        .run(payload.event_id, JSON.stringify(payload), new Date().toISOString())
-    }
-    this.updateCoverage(input)
+      this.updateCoverage(input)
+      this.db.prepare(`INSERT INTO media_reporting(external_media_id,wall_milliseconds,qualified)
+        VALUES(?,?,0) ON CONFLICT(external_media_id) DO UPDATE SET
+        wall_milliseconds=wall_milliseconds+excluded.wall_milliseconds`).run(input.externalMediaId, input.wallMilliseconds)
+      this.db.prepare('UPDATE media_reporting SET qualified=1 WHERE external_media_id=? AND wall_milliseconds>1200000')
+        .run(input.externalMediaId)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
     this.flush().catch(() => undefined)
     return firstEventId
   }
@@ -207,7 +234,7 @@ export class ImmersionOutbox {
     if (this.sending || !this.endpoint || !this.token) return
     this.sending = true
     try {
-      const rows = this.db.prepare('SELECT event_id,payload_json,attempts FROM outbox WHERE next_attempt_at<=? ORDER BY created_at LIMIT 128')
+      const rows = this.db.prepare('SELECT event_id,payload_json,attempts FROM outbox WHERE next_attempt_at<=? AND (json_extract(payload_json,\'$.event_type\')=\'daily_baseline\' OR EXISTS (SELECT 1 FROM media_reporting m WHERE m.external_media_id=json_extract(payload_json,\'$.external_media_id\') AND m.qualified=1)) ORDER BY created_at LIMIT 128')
         .all(Date.now()) as Array<{ event_id: string, payload_json: string, attempts: number }>
       if (!rows.length) return
       const response = await fetch(`${this.endpoint.replace(/\/$/, '')}/v1/immersion/sources/hayatan/events`, {
@@ -240,7 +267,7 @@ export class ImmersionOutbox {
       } catch (error) { this.db.exec('ROLLBACK'); throw error }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const rows = this.db.prepare('SELECT event_id,attempts FROM outbox WHERE next_attempt_at<=? ORDER BY created_at LIMIT 128')
+      const rows = this.db.prepare('SELECT event_id,attempts FROM outbox WHERE next_attempt_at<=? AND (json_extract(payload_json,\'$.event_type\')=\'daily_baseline\' OR EXISTS (SELECT 1 FROM media_reporting m WHERE m.external_media_id=json_extract(payload_json,\'$.external_media_id\') AND m.qualified=1)) ORDER BY created_at LIMIT 128')
         .all(Date.now()) as Array<{ event_id: string, attempts: number }>
       const statement = this.db.prepare('UPDATE outbox SET attempts=attempts+1,last_error=?,next_attempt_at=? WHERE event_id=?')
       for (const row of rows) statement.run(message.slice(0, 500), Date.now() + retryDelay(row.attempts), row.event_id)
@@ -259,7 +286,7 @@ export class ImmersionOutbox {
       [Math.max(0, input.contentStartSeconds), Math.min(input.durationSeconds, input.contentEndSeconds)]
     ])
     const covered = ranges.reduce((sum, range) => sum + range[1] - range[0], 0)
-    const completed = Boolean(row?.completion_emitted) || covered >= input.durationSeconds * 0.75
+    const completed = Boolean(row?.completion_emitted) || (covered >= input.durationSeconds * 0.75 || hasWatchedEnding(ranges, input.durationSeconds))
     this.db.prepare(`INSERT INTO episode_coverage(external_media_id,episode,duration_seconds,ranges_json,completion_emitted)
       VALUES(?,?,?,?,?) ON CONFLICT(external_media_id,episode) DO UPDATE SET
       duration_seconds=excluded.duration_seconds,ranges_json=excluded.ranges_json,
