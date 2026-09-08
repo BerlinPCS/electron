@@ -1,6 +1,7 @@
-import { autoUpdater } from 'electron-updater'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
-// autoUpdater.forceDevUpdateConfig = true
+import { autoUpdater } from 'electron-updater'
 
 export default class Updater {
   hasUpdate = false
@@ -10,12 +11,28 @@ export default class Updater {
       this.hasUpdate = true
     })
 
-    // Packaged builds read the GitHub repository from the generated
-    // app-update.yml. Development builds can opt in with
-    // autoUpdater.forceDevUpdateConfig and dev-app-update.yml.
-    if (!autoUpdater.isUpdaterActive()) return
-    autoUpdater.checkForUpdates()
-    setInterval(() => autoUpdater.checkForUpdates(), 1000 * 60 * 30).unref() // 30 mins
+    if (!autoUpdater.isUpdaterActive() || !this.hasConfiguration()) return
+    // Errors are already reported through electron-updater's logger/event.
+    void this.check().catch(() => undefined)
+    setInterval(() => { void this.check().catch(() => undefined) }, 1000 * 60 * 30).unref()
+  }
+
+  private hasConfiguration () {
+    return autoUpdater.forceDevUpdateConfig || existsSync(join(process.resourcesPath, 'app-update.yml'))
+  }
+
+  async check () {
+    if (!autoUpdater.isUpdaterActive()) return null
+    if (!this.hasConfiguration()) {
+      throw new Error('This local build has no update feed. Update it with a new local build.')
+    }
+    return autoUpdater.checkForUpdates()
+  }
+
+  async ready () {
+    const update = await this.check()
+    if (!update || update.isUpdateAvailable === false) throw new Error('No update available')
+    await update.downloadPromise
   }
 
   install (forceRunAfter = false) {

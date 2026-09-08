@@ -395,13 +395,11 @@ export default class IPC {
   }
 
   async checkUpdate () {
-    await autoUpdater.checkForUpdates()
+    await this.app.updater.check()
   }
 
   async updateReady () {
-    const update = await autoUpdater.checkForUpdates()
-    if (!update) throw new Error('No update available')
-    await update.downloadPromise
+    await this.app.updater.ready()
   }
 
   async spawnPlayer (url: string) {

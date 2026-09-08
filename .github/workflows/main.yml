@@ -90,6 +90,9 @@ jobs:
 
           node scripts/install-ffmpeg-release.mjs "$download_directory" "$FFMPEG_PLATFORM"
 
+      - name: Test updater and immersion accounting
+        run: node --experimental-transform-types --test test/updater.test.mjs test/immersion-ranges.test.mjs
+
       - name: Build and Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

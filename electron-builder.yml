@@ -111,6 +111,7 @@ linux:
       MimeType: "x-scheme-handler/hayatan;"
 npmRebuild: true
 publish:
+  releaseType: draft
   provider: github
   owner: BerlinPCS
   repo: electron
