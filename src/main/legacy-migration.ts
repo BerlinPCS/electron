@@ -36,6 +36,7 @@ const VOLATILE_ENTRIES = new Set([
 export interface HayaseMigrationPaths {
   currentUserData: string
   appData: string
+  development?: boolean
 }
 
 export interface HayaseMigrationState {
@@ -54,7 +55,9 @@ export async function getHayaseMigrationState ({
 export async function scheduleHayaseMigration (paths: HayaseMigrationPaths): Promise<boolean> {
   const state = await getHayaseMigrationState(paths)
   if (!state.source) return false
-  await writeFile(pendingImportPath(paths.appData), JSON.stringify({
+  const pendingPath = pendingImportPath(paths)
+  await mkdir(dirname(pendingPath), { recursive: true })
+  await writeFile(pendingPath, JSON.stringify({
     version: 1,
     source: state.source,
     requestedAt: new Date().toISOString()
@@ -64,9 +67,10 @@ export async function scheduleHayaseMigration (paths: HayaseMigrationPaths): Pro
 
 export async function applyPendingHayaseMigration ({
   currentUserData,
-  appData
+  appData,
+  development
 }: HayaseMigrationPaths): Promise<boolean> {
-  const pendingPath = pendingImportPath(appData)
+  const pendingPath = pendingImportPath({ currentUserData, appData, development })
   if (!await pathExists(pendingPath)) return false
 
   let source: string
@@ -232,8 +236,10 @@ async function pendingSource (pendingPath: string): Promise<string> {
   return pending.source
 }
 
-function pendingImportPath (appData: string): string {
-  return join(appData, PENDING_IMPORT)
+function pendingImportPath ({ currentUserData, appData, development }: HayaseMigrationPaths): string {
+  // Keep the installed application's legacy request location compatible, but
+  // never let development consume or replace a request for that application.
+  return join(development ? currentUserData : appData, PENDING_IMPORT)
 }
 
 async function pathExists (path: string): Promise<boolean> {

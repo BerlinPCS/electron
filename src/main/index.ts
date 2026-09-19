@@ -1,3 +1,5 @@
+import './development-profile.ts'
+
 import { optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, dialog } from 'electron'
 
@@ -148,7 +150,8 @@ function createWindow (): Promise<void> {
     try {
       await applyPendingHayaseMigration({
         currentUserData: app.getPath('userData'),
-        appData: app.getPath('appData')
+        appData: app.getPath('appData'),
+        development: !app.isPackaged
       })
       migrationBridge = await migrateImportedBrowserStorage()
     } catch (error) {

@@ -7,18 +7,21 @@ import type { MiningDictionaryEvent } from '../main/hoshidicts/types.ts'
 import type { ImmersionConnectionPatch, ImmersionDailyBaseline, ImmersionSegment } from '../main/immersion.ts'
 import type IPC from '../main/ipc.ts'
 import type { MiningAnkiEvent } from '../main/mining-anki.ts'
+import type { SubtitleCache } from '../main/torrent/subtitle-cache.ts'
+import type { SubtitleSamplingAPI } from '../main/torrent/subtitle-sampling-types.ts'
 import type { Remote } from 'abslink'
 import type { Native } from 'native'
 import type TorrentClient from 'torrent-client'
 import type { PROVIDERS } from 'torrent-client/doh'
+type SamplingClient = TorrentClient & { subtitleSampling: SubtitleSamplingAPI, subtitleCache: SubtitleCache }
 
 ipcRenderer.send('preload-done')
 
-const torrent = new Promise<Remote<TorrentClient>>(resolve => {
+const torrent = new Promise<Remote<SamplingClient>>(resolve => {
   ipcRenderer.once('port', ({ ports }) => {
     if (!ports[0]) return
     ports[0].start()
-    resolve(wrapPort<TorrentClient>(ports[0]) as unknown as Remote<TorrentClient>)
+    resolve(wrapPort<SamplingClient>(ports[0]) as unknown as Remote<SamplingClient>)
   })
 })
 const version = ipcRenderer.invoke('version')
@@ -75,6 +78,11 @@ const native: Partial<Native> = {
   library: async () => await (await torrent).library(),
   attachments: async (hash, id) => await (await torrent).attachments.attachments(hash, id),
   tracks: async (hash, id) => await (await torrent).attachments.tracks(hash, id),
+  subtitleCacheList: async (hash, id) => await (await torrent).subtitleCache.list(hash, id),
+  subtitleCachePut: async (hash, id, subtitle) => await (await torrent).subtitleCache.put(hash, id, subtitle),
+  subtitleSampleStart: async (request, callback) => await (await torrent).subtitleSampling.start(request, proxy(callback)),
+  subtitleSampleUpdate: async (id, context) => { await (await torrent).subtitleSampling.update(id, context) },
+  subtitleSampleCancel: async id => { await (await torrent).subtitleSampling.cancel(id) },
   subtitles: async (hash, id, cb) => await (await torrent).attachments.subtitle(hash, id, proxy(cb)),
   errors: async (cb) => await (await torrent).errors(proxy(cb)),
   chapters: async (hash, id) => await (await torrent).attachments.chapters(hash, id),
@@ -110,7 +118,8 @@ const native: Partial<Native> = {
   },
   share: async (data) => {
     if (!data) return
-    await navigator.clipboard.writeText(data.url ?? data.text ?? data.title!)
+    const text = data.url ?? data.text ?? data.title
+    if (text !== undefined) await navigator.clipboard.writeText(text)
   },
   defaultTransparency: () => false,
   debug: async (levels) => await (await torrent).debug(levels),

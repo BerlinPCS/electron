@@ -18,6 +18,7 @@ import forkPath from './background/background.ts?modulePath'
 import Discord from './discord.ts'
 import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/supervisor.ts'
 // import Protocol from './protocol.ts'
+import { ImmersionOutbox } from './immersion.ts'
 import IPC from './ipc.ts'
 import { mediaMimeType, MiningAnkiService } from './mining-anki.ts'
 import { localAudioResponse, MiningAudioRepository, readBoundedResponseBytes } from './mining-audio.ts'
@@ -27,7 +28,6 @@ import Protocol from './protocol.ts'
 import store from './store.ts'
 import { startTorrentProcess } from './torrent/process.ts'
 import Updater from './updater.ts'
-import { ImmersionOutbox } from './immersion.ts'
 
 import type { Messageable } from 'abslink'
 
@@ -75,7 +75,7 @@ function setCors (record?: Record<string, string[]>, credentials = false) {
 
 export default class App {
   immersion = new ImmersionOutbox(join(app.getPath('userData'), 'immersion.sqlite3'))
-  dedicatedTorrentActive = store.data.dedicatedTorrentProcess === true
+  dedicatedTorrentActive = store.data.dedicatedTorrentProcess
   torrentProcess = startTorrentProcess(forkPath, this.dedicatedTorrentActive)
 
   mainWindow = new BrowserWindow({
@@ -397,7 +397,7 @@ export default class App {
     //   notification.show()
     // })
 
-    electronApp.setAppUserModelId('com.github.berlinpcs.hayatan')
+    electronApp.setAppUserModelId(app.isPackaged ? 'com.github.berlinpcs.hayatan' : 'com.github.berlinpcs.hayatan.dev')
     if (process.platform === 'win32') {
       // this message usually fires in dev-mode from the parent process
       process.on('message', data => {
@@ -414,7 +414,15 @@ export default class App {
     }
 
     if (is.dev) this.mainWindow.webContents.openDevTools()
-    this.mainWindow.loadURL(BASE_URL, { userAgent }).catch(err => {
+    // Local preview must never silently boot an obsolete offline service-worker
+    // build. Keep application settings/IndexedDB intact; clear only web caches.
+    const prepareInterface = is.dev
+      ? Promise.all([
+        this.mainWindow.webContents.session.clearStorageData({ origin: BASE_ORIGIN, storages: ['serviceworkers', 'cachestorage'] }),
+        this.mainWindow.webContents.session.clearCache()
+      ])
+      : Promise.resolve()
+    prepareInterface.then(() => this.mainWindow.loadURL(BASE_URL, { userAgent })).catch(err => {
       log.error(err)
       if (this.hasDOH) return
       this.setDOH('https://cloudflare-dns.com/dns-query')
@@ -471,6 +479,7 @@ export default class App {
       data: {
         ...store.data.torrentSettings,
         path: store.data.torrentPath,
+        ...(!app.isPackaged ? { temporaryPath: join(app.getPath('userData'), 'torrent-cache') } : {}),
         ...(this.hasDOH && store.data.doh ? { doh: store.data.doh } : {})
       }
     }, [port1]))

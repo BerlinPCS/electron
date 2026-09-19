@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { runInNewContext } from 'node:vm'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 
 import { transformSync } from 'esbuild'
 
@@ -24,12 +24,14 @@ function fixture ({ platform = 'darwin', configured = true, available = false, f
   }
   const module = { exports: {} }
   runInNewContext(code, {
-    module, exports: module.exports,
+    module,
+    exports: module.exports,
     require: name => name === 'electron-updater' ? { autoUpdater: updater } : name === 'node:fs' ? { existsSync: () => configured } : require(name),
     process: { platform, resourcesPath: '/app/resources' },
     setInterval: callback => { timer = callback; return { unref () {} } }
   })
-  const instance = new module.exports.default()
+  const Updater = module.exports.default
+  const instance = new Updater()
   return { instance, updater, checks: () => checks, tick: () => timer?.() }
 }
 

@@ -31,6 +31,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-D2afdKdrh897r+Ftl0KrslxwejdeNjTbk45gj2csuSs=
 
+patchedDependencies:
+  torrent-client@1.0.0:
+    hash: 2d15d872e20cef6856ce0e7d2db697ac3e26da2fe983e1885421a278eccfc0c9
+    path: patches/torrent-client@1.0.0.patch
+
 importers:
 
   .:
@@ -101,7 +106,7 @@ importers:
         version: 3.7.1(picomatch@4.0.4)(rollup@4.53.5)
       torrent-client:
         specifier: github:hayase-app/torrent-client#98a32231d2453be0293ca3b581860aead469e509
-        version: https://codeload.github.com/hayase-app/torrent-client/tar.gz/98a32231d2453be0293ca3b581860aead469e509(bare-url@2.4.6)
+        version: https://codeload.github.com/hayase-app/torrent-client/tar.gz/98a32231d2453be0293ca3b581860aead469e509(patch_hash=2d15d872e20cef6856ce0e7d2db697ac3e26da2fe983e1885421a278eccfc0c9)(bare-url@2.4.6)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -9082,7 +9087,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  torrent-client@https://codeload.github.com/hayase-app/torrent-client/tar.gz/98a32231d2453be0293ca3b581860aead469e509(bare-url@2.4.6):
+  torrent-client@https://codeload.github.com/hayase-app/torrent-client/tar.gz/98a32231d2453be0293ca3b581860aead469e509(patch_hash=2d15d872e20cef6856ce0e7d2db697ac3e26da2fe983e1885421a278eccfc0c9)(bare-url@2.4.6):
     dependencies:
       '@silentbot1/nat-api': 0.4.9
       '@types/chromecast-caf-receiver': 6.0.26

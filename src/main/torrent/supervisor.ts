@@ -1,14 +1,15 @@
 import { fork } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import type { Readable } from 'node:stream'
-import type { MessagePortMain } from 'electron'
+
 import type { Packet } from './transport.ts'
+import type { MessagePortMain } from 'electron'
+import type { Readable } from 'node:stream'
 
 export class DedicatedTorrentProcess extends EventEmitter {
-  private child
-  private ports = new Map<number, MessagePortMain>()
+  private readonly child
+  private readonly ports = new Map<number, MessagePortMain>()
   private nextPort = 0
-  private timer
+  private readonly timer
   constructor (script: string, executable: string) {
     super()
     // Do not pass backend tokens, proxy settings or Node injection flags to torrents.
@@ -21,8 +22,8 @@ export class DedicatedTorrentProcess extends EventEmitter {
     this.timer = setTimeout(() => this.child.kill(), 15_000)
     this.child.on('message', (packet: Packet) => {
       if (packet.kind === 'ready') { clearTimeout(this.timer); this.emit('spawn') }
-      if (packet.kind === 'port') this.ports.get(packet.port!)?.postMessage(packet.data)
-      if (packet.kind === 'close') { this.ports.get(packet.port!)?.close(); this.ports.delete(packet.port!) }
+      if (packet.kind === 'port' && packet.port !== undefined) this.ports.get(packet.port)?.postMessage(packet.data)
+      if (packet.kind === 'close' && packet.port !== undefined) { this.ports.get(packet.port)?.close(); this.ports.delete(packet.port) }
     })
     this.child.on('error', () => this.child.kill())
     this.child.once('close', (code) => {
@@ -32,12 +33,14 @@ export class DedicatedTorrentProcess extends EventEmitter {
       this.emit('exit', code)
     })
   }
+
   get stdout (): Readable | null { return this.child.stdout }
   get stderr (): Readable | null { return this.child.stderr }
   get pid () { return this.child.pid }
   private send (packet: Packet) {
     if (this.child.connected) this.child.send(packet, error => { if (error) this.child.kill() })
   }
+
   postMessage (data: unknown, ports: MessagePortMain[] = []) {
     const ids = ports.map(port => {
       const id = ++this.nextPort
@@ -49,5 +52,6 @@ export class DedicatedTorrentProcess extends EventEmitter {
     })
     this.send({ kind: 'control', data, ports: ids })
   }
+
   kill () { return this.child.kill() }
 }

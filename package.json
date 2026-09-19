@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "7.1.6",
+  "version": "7.1.7",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
@@ -16,8 +16,8 @@
     "build:sidecar": "node scripts/build-hoshidicts.mjs && node scripts/prepare-ffmpeg.mjs",
     "build:ffmpeg:source": "node scripts/build-ffmpeg.mjs",
     "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
-    "start": "electron-vite preview",
-    "dev": "npm run build:sidecar && electron-vite dev --watch",
+    "start": "node scripts/start-dev.mjs",
+    "dev": "npm run build:sidecar && npm run prepare:torrent-runtime && electron-vite dev --watch",
     "rebuild": "electron-rebuild -f -w yencode",
     "build": "npm run build:sidecar && electron-vite build",
     "build:publish": "npm run build && electron-builder -p always",
@@ -25,7 +25,8 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
-    "build:mac:local": "bash scripts/build-local-macos.sh"
+    "build:mac:local": "bash scripts/build-local-macos.sh",
+    "prepare:torrent-runtime": "node scripts/prepare-dev-torrent-runtime.mjs"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
@@ -86,6 +87,9 @@
           "fast-readable-async-iterator": "^1.1.2"
         }
       }
+    },
+    "patchedDependencies": {
+      "torrent-client@1.0.0": "patches/torrent-client@1.0.0.patch"
     }
   },
   "dependencies": {

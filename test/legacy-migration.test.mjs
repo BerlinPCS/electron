@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -13,7 +13,7 @@ import {
 } from '../src/main/legacy-migration.ts'
 
 test('detects a pre-mining Hayase profile and replaces compatible Hayatan data', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'hayatan-migration-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'hayatan-migration-')))
   t.after(() => rm(root, { recursive: true, force: true }))
 
   const legacy = join(root, 'hayase')
@@ -92,4 +92,33 @@ test('does not schedule an import when no Hayase profile exists', async t => {
   assert.deepEqual(await getHayaseMigrationState(paths), { available: false })
   assert.equal(await scheduleHayaseMigration(paths), false)
   assert.equal(await applyPendingHayaseMigration(paths), false)
+})
+
+test('development and installed profiles consume only their own pending imports', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hayatan-migration-isolation-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const legacy = join(root, 'hayase')
+  const main = { currentUserData: join(root, 'hayatan'), appData: root }
+  const dev = { currentUserData: join(root, 'Hayatan Dev'), appData: root, development: true }
+  await mkdir(legacy, { recursive: true })
+  await mkdir(main.currentUserData, { recursive: true })
+  await mkdir(dev.currentUserData, { recursive: true })
+  await writeFile(join(legacy, 'settings.json'), '{"marker":"legacy"}')
+  await writeFile(join(main.currentUserData, 'settings.json'), '{"marker":"main"}')
+  await writeFile(join(dev.currentUserData, 'settings.json'), '{"marker":"dev"}')
+
+  assert.equal(await scheduleHayaseMigration(main), true)
+  assert.equal(await applyPendingHayaseMigration(dev), false)
+  assert.equal(await readFile(join(dev.currentUserData, 'settings.json'), 'utf8'), '{"marker":"dev"}')
+  assert.equal(await applyPendingHayaseMigration(main), true)
+
+  assert.equal(await scheduleHayaseMigration(dev), true)
+  assert.equal(await applyPendingHayaseMigration(main), false)
+  assert.equal(await applyPendingHayaseMigration(dev), true)
+
+  // Simultaneous requests must coexist rather than overwrite or consume one another.
+  await scheduleHayaseMigration(main)
+  await scheduleHayaseMigration(dev)
+  assert.equal(await applyPendingHayaseMigration(dev), true)
+  assert.equal(await applyPendingHayaseMigration(main), true)
 })

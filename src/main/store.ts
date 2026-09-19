@@ -9,7 +9,7 @@ import { DEFAULT_MINING_ANKI_SETTINGS } from './mining-anki.ts'
 const DEFAULTS = {
   angle: 'default',
   player: '',
-  torrentPath: '',
+  torrentPath: app.isPackaged ? '' : join(app.getPath('userData'), 'torrents'),
   dedicatedTorrentProcess: false,
   doh: '',
   setupVersion: 0,

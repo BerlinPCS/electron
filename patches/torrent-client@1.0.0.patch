@@ -1,0 +1,210 @@
+diff --git a/ebml/attachments.ts b/ebml/attachments.ts
+index d9059e567e92bf0139a984119a4ca0876db9b3fa..6fcf883223cb75da046dbe1aea5612f3644538d8 100644
+--- a/ebml/attachments.ts
++++ b/ebml/attachments.ts
+@@ -48,9 +48,13 @@ export default new class Attachments {
+     if (!metadata) throw new Error('File not found')
+     metadata.removeAllListeners('subtitle')
+     metadata.on('subtitle', (a, b) => cb(a, b))
++    for (const { subtitle, track } of metadata.subtitleReplay.values()) cb(subtitle, track)
+   }
+ 
+   register (files: File[], hash: string) {
++    for (const [file, metadata] of this.metadatamap) {
++      if (!files.includes(file)) { metadata.destroy(); this.metadatamap.delete(file) }
++    }
+     this.filemap.clear()
+     files.forEach((file, id) => {
+       // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+diff --git a/ebml/metadata.ts b/ebml/metadata.ts
+index 47f4389ca6ffe248fab007174e1d83feef6490c7..3af0e935534f3acbe7509b2e037be43edba8f033 100644
+--- a/ebml/metadata.ts
++++ b/ebml/metadata.ts
+@@ -11,15 +11,15 @@ import type File from 'webtorrent/lib/file'
+ import 'fast-readable-async-iterator'
+ 
+ function getChild <T extends EbmlTagId> (chunk: EbmlMasterTag | EbmlDataTag, tag: T) {
+-  if (!('Children' in chunk)) return undefined
++  if (!chunk || !('Children' in chunk)) return undefined
+   const child = chunk.Children.find(child => child.id === tag)
+   if (!child) return undefined
+-  if ('data' in child) return child
+-  return undefined
++  return child
+ }
+ 
+ function getData <T extends EbmlTagId> (chunk: EbmlMasterTag | EbmlDataTag, tag: T) {
+-  return getChild(chunk, tag)?.data
++  const child = getChild(chunk, tag)
++  return child && 'data' in child ? child.data : undefined
+ }
+ 
+ export default class Metadata extends Util {
+@@ -27,8 +27,9 @@ export default class Metadata extends Util {
+   currentClusterTimecode: number | null = null
+ 
+   destroyed = false
++  subtitleReplay = new Map<string, { subtitle: { text: string, time: number, duration: number }, track: number }>()
+ 
+-  subtitleTracks = new Map<string | number, {number: number, language: string, type: string, _compressed: boolean, default: boolean, forced: boolean, name?: string, header?: string}>()
++  subtitleTracks = new Map<string | number, {number: number, language: string, type: string, _compressed: boolean, _headerStrip?: Uint8Array, default: boolean, forced: boolean, name?: string, header?: string}>()
+ 
+   constructor (file: File) {
+     super()
+@@ -60,6 +61,17 @@ export default class Metadata extends Util {
+ 
+       const codecID = String(getData(entry, EbmlTagId.CodecID) || '')
+       if (codecID.startsWith('S_TEXT')) {
++        const encodings = getChild(entry, EbmlTagId.ContentEncodings)
++        const encodingEntries = encodings && 'Children' in encodings ? encodings.Children.filter(c => c.id === EbmlTagId.ContentEncoding) : []
++        // Unsupported compression/encryption is a missing track, never a fatal
++        // zlib decode of unrelated bytes. Only frame-level encodings are used.
++        if (encodingEntries.length > 1) continue
++        const encoding = encodingEntries[0]
++        if (encoding && (Number(getData(encoding, EbmlTagId.ContentEncodingScope) ?? 1) !== 1 || Number(getData(encoding, EbmlTagId.ContentEncodingType) ?? 0) !== 0)) continue
++        const compression = encoding && getChild(encoding, EbmlTagId.ContentCompression)
++        const algorithm = compression ? Number(getData(compression, EbmlTagId.ContentCompAlgo) ?? 0) : undefined
++        if (algorithm !== undefined && algorithm !== 0 && algorithm !== 3) continue
++        const stripped = compression && getData(compression, EbmlTagId.ContentCompSettings)
+         const track: {
+           number: number
+           language: string
+@@ -68,6 +80,7 @@ export default class Metadata extends Util {
+           forced: boolean
+           name: string | undefined
+           _compressed: boolean
++          _headerStrip?: Uint8Array
+           header?: string
+         } = {
+           number: Number(getData(entry, EbmlTagId.TrackNumber)),
+@@ -76,12 +89,8 @@ export default class Metadata extends Util {
+           default: Boolean(getData(entry, EbmlTagId.FlagDefault) ?? 1),
+           forced: Boolean(getData(entry, EbmlTagId.FlagForced) || 0),
+           name: getData(entry, EbmlTagId.Name) as string | undefined,
+-          _compressed: 'Children' in entry && entry.Children.some(c =>
+-            c.id === EbmlTagId.ContentEncodings && 'Children' in c && c.Children.some(cc =>
+-              cc.id === EbmlTagId.ContentEncoding &&
+-              getChild(cc, EbmlTagId.ContentCompression)
+-            )
+-          )
++          _compressed: algorithm === 0,
++          _headerStrip: algorithm === 3 && stripped instanceof Uint8Array ? stripped : undefined
+         }
+ 
+         const header = getData(entry, EbmlTagId.CodecPrivate)
+@@ -139,8 +148,8 @@ export default class Metadata extends Util {
+     const Info = await this.readSeekHeadTag('Info')
+ 
+     if (!Info?.Children?.length) return undefined
+-    const Duration = getChild(Info, EbmlTagId.Duration)
+-    return Duration?.data !== undefined ? Number(Duration.data) : undefined
++    const duration = getData(Info, EbmlTagId.Duration)
++    return duration !== undefined ? Number(duration) : undefined
+   }
+ 
+   async handleBlockGroup (chunk: EbmlMasterTag, timecodeScale: number, currentClusterTimecode: number) {
+@@ -155,15 +164,20 @@ export default class Metadata extends Util {
+       if (!track) return
+ 
+       const payload = track._compressed
+-        ? inflateSync(block.payload)
+-        : block.payload
++        ? inflateSync(block.payload, { maxOutputLength: 1024 * 1024 })
++        : track._headerStrip ? concat([track._headerStrip, block.payload]) : block.payload
+ 
++      const fields = /^(ass|ssa)$/.test(track.type) ? arr2text(payload).split(',') : undefined
+       const subtitle = {
+-        text: arr2text(payload),
++        ...(fields ? { readOrder: Number(fields[0]), layer: Number(fields[1]), style: fields[2], name: fields[3], marginL: Number(fields[4]), marginR: Number(fields[5]), marginV: Number(fields[6]), effect: fields[7] } : {}),
++        text: fields ? fields.slice(8).join(',') : arr2text(payload),
+         time: (block.value + currentClusterTimecode) * timecodeScale,
+         duration: blockDuration * timecodeScale
+       }
+ 
++      const key = `${block.track}:${subtitle.time}:${fields?.[0] ?? subtitle.text}`
++      this.subtitleReplay.set(key, { subtitle, track: block.track })
++      if (this.subtitleReplay.size > 5000) this.subtitleReplay.delete(this.subtitleReplay.keys().next().value!)
+       this.emit('subtitle', subtitle, block.track)
+     }
+   }
+@@ -182,7 +196,7 @@ export default class Metadata extends Util {
+     })
+ 
+     let timecodeScale = this.timecodeScale
+-    let currentClusterTimecode = this.currentClusterTimecode
++    let currentClusterTimecode: number | null = null
+ 
+     const tagMap: Record<number, (tag: EbmlMasterTag | EbmlDataTag) => void> = {
+       [EbmlTagId.TimecodeScale]: (tag) => {
+@@ -192,7 +206,7 @@ export default class Metadata extends Util {
+         if ('data' in tag) this.currentClusterTimecode = currentClusterTimecode = tag.data == null ? null : Number(tag.data)
+       },
+       [EbmlTagId.BlockGroup]: (tag) => {
+-        if ('Children' in tag) this.handleBlockGroup(tag, timecodeScale, currentClusterTimecode ?? 0)
++        if ('Children' in tag) this.handleBlockGroup(tag, timecodeScale, currentClusterTimecode ?? 0).catch(error => console.warn('Embedded subtitle packet could not be decoded', error instanceof Error ? error.message : String(error)))
+       }
+     }
+ 
+@@ -200,13 +214,14 @@ export default class Metadata extends Util {
+ 
+     for await (const chunk of stream) {
+       if (!stable) {
+-        for (let i = 0; i < chunk.length - 12; i++) {
+-          if (chunk[i] === 0x1f && chunk[i + 1] === 0x43 && chunk[i + 2] === 0xb6 && chunk[i + 3] === 0x75) {
+-            const len = 8 - Math.floor(Math.log2(chunk[i + 4]!))
+-            if (EbmlTagId[chunk[i + 4 + len]!]) {
++        const scan: Uint8Array = concat([buffer!, chunk])
++        for (let i = 0; i < scan.length - 12; i++) {
++          if (scan[i] === 0x1f && scan[i + 1] === 0x43 && scan[i + 2] === 0xb6 && scan[i + 3] === 0x75) {
++            const len = 8 - Math.floor(Math.log2(scan[i + 4]!))
++            if (EbmlTagId[scan[i + 4 + len]!]) {
+               stable = true
+               buffer = null
+-              for (const tag of decoder.parseTags(chunk.slice(i))) {
++              for (const tag of decoder.parseTags(scan.slice(i))) {
+                 tagMap[tag.id]?.(tag)
+               }
+               break
+@@ -214,7 +229,7 @@ export default class Metadata extends Util {
+           }
+         }
+         if (!stable) {
+-          buffer = concat([buffer!, chunk])
++          buffer = scan.slice(-16)
+         }
+       } else {
+         for (const tag of decoder.parseTags(chunk)) {
+diff --git a/ebml/util.ts b/ebml/util.ts
+index b004436df3ac7a252995c82b824d4cefcf6fe4f1..531f5350ef1983bfeac8cf1b16d4f4e1a8e1a39d 100644
+--- a/ebml/util.ts
++++ b/ebml/util.ts
+@@ -100,7 +100,7 @@ export default class Util extends EventEmitter {
+ 
+     const storedTag = tag.toLowerCase()
+     if (!this.tagCache[storedTag] && seekHead[tag]) {
+-      const stream = this.getFileStream()
++      const stream = this.getFileStream(this.segmentStart + Number(seekHead[tag]!.data))
+       const child = await this.readUntilTag(stream, EbmlTagId[tag as keyof typeof EbmlTagId])
+       if (!child) return null
+       child.absoluteStart = this.segmentStart + (Number(seekHead[tag]?.data) || 0)
+diff --git a/index.ts b/index.ts
+index 1afb42bbd194ad5b74bcaa4625512958b455c320..c2eef6ec831bd6ab187b68dbabfcf1281e27f307 100644
+--- a/index.ts
++++ b/index.ts
+@@ -509,6 +509,7 @@ export default class TorrentClient {
+     })
+ 
+     const cachedStore = this[store]
++    const cachedPath = this[path]
+ 
+     const promises: Array<Promise<void>> = []
+ 
+@@ -521,7 +522,7 @@ export default class TorrentClient {
+           const storeData = await cachedStore.get(hash)
+           if (!storeData) return
+ 
+-          const torrent = tmpclient.add(storeData.torrent, { path: this[path], announce: [], deselect: true, paused: true, skipVerify: true })
++          const torrent = tmpclient.add(storeData.torrent, { path: cachedPath, announce: [], deselect: true, paused: true, skipVerify: true })
+ 
+           if (!torrent.ready) await new Promise(resolve => torrent.once('ready', resolve))
+ 

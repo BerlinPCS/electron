@@ -7,3 +7,4 @@ out
 .sidecar-build
 resources/sidecars/*
 !resources/sidecars/FFMPEG-LICENSE.txt
+/docs/

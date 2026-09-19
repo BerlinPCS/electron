@@ -1,7 +1,8 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
+import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+
 import { DedicatedTorrentProcess } from '../src/main/torrent/supervisor.ts'
 const fixture = fileURLToPath(new URL('./fixtures/torrent-child.mjs', import.meta.url))
 class Port extends EventEmitter {

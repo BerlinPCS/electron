@@ -13,8 +13,8 @@ export default class Updater {
 
     if (!autoUpdater.isUpdaterActive() || !this.hasConfiguration()) return
     // Errors are already reported through electron-updater's logger/event.
-    void this.check().catch(() => undefined)
-    setInterval(() => { void this.check().catch(() => undefined) }, 1000 * 60 * 30).unref()
+    this.check().catch(() => undefined)
+    setInterval(() => { this.check().catch(() => undefined) }, 1000 * 60 * 30).unref()
   }
 
   private hasConfiguration () {
@@ -26,12 +26,12 @@ export default class Updater {
     if (!this.hasConfiguration()) {
       throw new Error('This local build has no update feed. Update it with a new local build.')
     }
-    return autoUpdater.checkForUpdates()
+    return await autoUpdater.checkForUpdates()
   }
 
   async ready () {
     const update = await this.check()
-    if (!update || update.isUpdateAvailable === false) throw new Error('No update available')
+    if (!update?.isUpdateAvailable) throw new Error('No update available')
     await update.downloadPromise
   }
 

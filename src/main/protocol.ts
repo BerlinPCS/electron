@@ -1,12 +1,8 @@
-import path from 'path'
-
 import { app, shell, type BrowserWindow } from 'electron'
 
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('hayatan', process.execPath, [path.resolve(process.argv[1]!)])
-  }
-} else {
+// Development has its own profile and must not take over links intended for
+// the installed application. Explicitly supplied links still work below.
+if (app.isPackaged) {
   app.setAsDefaultProtocolClient('hayatan')
 }
 
@@ -39,9 +35,9 @@ export default class Protocol {
 
   _parseProtocol (text: string) {
     const match = text.match(this.protocolRx)
-    if (!match) return null
+    if (!match?.[1]) return null
     return {
-      target: match[1]!,
+      target: match[1],
       value: match[2]
     }
   }
