@@ -7,7 +7,7 @@ let sess: SetCookie | undefined
 let token: string | undefined
 
 async function getCookie () {
-  if (sess && token && sess.expires! >= new Date()) return { sess, token }
+  if (sess?.expires && token && sess.expires >= new Date()) return { sess, token }
 
   const res = await fetch('https://anilist.co/')
 
@@ -27,9 +27,11 @@ async function getCookie () {
 export async function rewriteInternalRequest (details: OnBeforeSendHeadersListenerDetails) {
   try {
     if (details.method !== 'POST') return
-    const body = details.uploadData![0]!.bytes.toString()
+    const upload = details.uploadData?.[0]
+    if (!upload) return
+    const body = upload.bytes.toString()
 
-    details.uploadData![0]!.bytes = Buffer.from(body.replace('\n', ','))
+    upload.bytes = Buffer.from(body.replace('\n', ','))
 
     delete details.requestHeaders.Authorization
 

@@ -2,6 +2,7 @@
 // ABI and architecture match the torrent bundle. Never modify the main app fuse.
 const { cp, mkdir, copyFile, readFile, writeFile } = require('node:fs/promises')
 const { join } = require('node:path')
+
 const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses')
 
 /** @param {import('electron-builder').AfterPackContext} context */

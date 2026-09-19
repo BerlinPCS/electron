@@ -142,7 +142,7 @@ test('does not retry combined capture after an FFmpeg failure', async () => {
     return child
   }
   const encoder = new MiningMediaEncoder({
-    ffmpegPath: '/bin/true',
+    ffmpegPath: process.execPath,
     spawnImplementation,
     fetchImplementation: async () => new Response(null, { status: 200 })
   })
@@ -174,7 +174,7 @@ test('reads audio duration without starting an FFmpeg sidecar', async () => {
   wave.write('data', 36)
   wave.writeUInt32LE(sampleCount * 2, 40)
 
-  const encoder = new MiningMediaEncoder({ ffmpegPath: '/bin/true' })
+  const encoder = new MiningMediaEncoder({ ffmpegPath: process.execPath })
   assert.equal(await encoder.probeDuration({
     filename: 'word.wav',
     data: wave
@@ -182,7 +182,7 @@ test('reads audio duration without starting an FFmpeg sidecar', async () => {
 })
 
 test('returns no duration for invalid audio data', async () => {
-  const encoder = new MiningMediaEncoder({ ffmpegPath: '/bin/true' })
+  const encoder = new MiningMediaEncoder({ ffmpegPath: process.execPath })
   assert.equal(await encoder.probeDuration({
     filename: 'word.mp3',
     data: new Uint8Array([1, 2, 3])

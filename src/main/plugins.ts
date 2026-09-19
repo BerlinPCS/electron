@@ -49,12 +49,12 @@ function crxZipOffset (buf: ArrayBuffer): number {
 
 function toPluginMeta (raw: Record<string, unknown>) {
   return {
-    name: (raw.name as string) ?? 'Unknown',
-    version: (raw.version as string) ?? '0.0.0',
-    description: (raw.description as string) ?? '',
+    name: (raw.name as string | undefined) ?? 'Unknown',
+    version: (raw.version as string | undefined) ?? '0.0.0',
+    description: (raw.description as string | undefined) ?? '',
     permissions: [...new Set([
-      ...(raw.permissions as string[] ?? []),
-      ...(raw.host_permissions as string[] ?? [])
+      ...(raw.permissions as string[] | undefined ?? []),
+      ...(raw.host_permissions as string[] | undefined ?? [])
     ])]
   }
 }
@@ -114,9 +114,8 @@ export default class Plugins {
       filters: [{ name: 'Extension Files', extensions: ['zip', 'crx', 'json'] }],
       properties: ['openFile']
     })
-    if (result.canceled || !result.filePaths.length) throw new Error('No file selected')
-
-    const filePath = result.filePaths[0]!
+    const filePath = result.filePaths[0]
+    if (result.canceled || !filePath) throw new Error('No file selected')
     const ext = extname(filePath).toLowerCase()
     let raw: Record<string, unknown>
     let pending: Blob | string
@@ -133,7 +132,7 @@ export default class Plugins {
       pending = dirname(filePath)
     }
 
-    const id = (raw.name as string) ?? basename(filePath, ext)
+    const id = (raw.name as string | undefined) ?? basename(filePath, ext)
     this.pendingImports.set(id, pending)
     return { id, ...toPluginMeta(raw) }
   }

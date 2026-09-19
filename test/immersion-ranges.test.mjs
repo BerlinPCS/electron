@@ -38,7 +38,6 @@ test('splits wall time at the Europe Berlin day boundary', () => {
   assert.equal(parts[1][0].toISOString(), '2026-08-31T22:00:00.000Z')
 })
 
-
 test('a resumed episode can complete from its watched ending, but seek points cannot', () => {
   assert.equal(hasWatchedEnding([[1200, 1300]], 1440), true)
   assert.equal(hasWatchedEnding([[1400, 1405]], 1440), false)

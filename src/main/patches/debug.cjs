@@ -1,4 +1,3 @@
-/* eslint-env browser */
 /* eslint-disable */
 // @ts-nocheck
 // patched version of debug because there's actually not a way to disable colors globally!

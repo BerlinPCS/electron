@@ -10,13 +10,14 @@ export interface Packet {
 }
 
 export class PipePort extends EventEmitter {
-  private id: number
-  private send: (packet: Packet) => void
+  private readonly id: number
+  private readonly send: (packet: Packet) => void
   constructor (id: number, send: (packet: Packet) => void) {
     super()
     this.id = id
     this.send = send
   }
+
   start () {}
   postMessage (data: unknown) { this.send({ kind: 'port', port: this.id, data }) }
   close () { this.removeAllListeners(); this.send({ kind: 'close', port: this.id }) }
@@ -35,11 +36,11 @@ export function childTransport (send: (packet: Packet) => void) {
           return port
         })
         parent.emit('message', { data: packet.data, ports: attached })
-      } else if (packet.kind === 'port') {
-        ports.get(packet.port!)?.emit('message', { data: packet.data })
-      } else if (packet.kind === 'close') {
-        ports.get(packet.port!)?.removeAllListeners()
-        ports.delete(packet.port!)
+      } else if (packet.kind === 'port' && packet.port !== undefined) {
+        ports.get(packet.port)?.emit('message', { data: packet.data })
+      } else if (packet.kind === 'close' && packet.port !== undefined) {
+        ports.get(packet.port)?.removeAllListeners()
+        ports.delete(packet.port)
       }
     }
   }

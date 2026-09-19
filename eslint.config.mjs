@@ -9,6 +9,8 @@ export default tseslint.config(
     ..._globals.node,
     ..._globals.worker
   }),
+  { files: ['**/*.cjs'], rules: { '@typescript-eslint/no-require-imports': 'off' } },
+  { files: ['**/*.ts'], rules: { 'no-undef': 'off' } },
   {
     languageOptions: {
       parserOptions: {

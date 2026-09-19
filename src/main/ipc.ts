@@ -157,7 +157,8 @@ export default class IPC {
 
     const scheduled = await scheduleHayaseMigration({
       currentUserData: app.getPath('userData'),
-      appData: app.getPath('appData')
+      appData: app.getPath('appData'),
+      development: !app.isPackaged
     })
     if (!scheduled) return false
     app.relaunch()
@@ -187,9 +188,8 @@ export default class IPC {
       title: 'Select video player executable',
       properties: ['openFile']
     })
-    if (canceled || !filePaths.length) return store.get('player')
-
-    const path = filePaths[0]!
+    const path = filePaths[0]
+    if (canceled || !path) return store.get('player')
 
     store.set('player', path)
     return basename(path, extname(path))
@@ -197,7 +197,7 @@ export default class IPC {
 
   torrentProcessState () {
     return {
-      enabled: store.data.dedicatedTorrentProcess === true,
+      enabled: store.data.dedicatedTorrentProcess,
       active: this.app.dedicatedTorrentActive,
       available: torrentRuntimeAvailable(),
       executable: torrentExecutable()
@@ -222,9 +222,8 @@ export default class IPC {
       title: 'Select torrent download location',
       properties: ['openDirectory']
     })
-    if (canceled || !filePaths.length) return store.get('torrentPath')
-
-    let path = filePaths[0]!
+    let path = filePaths[0]
+    if (canceled || !path) return store.get('torrentPath')
 
     if (dirname(path) === path) throw new Error('Cannot select root directory as download location. Please create a folder inside the desired drive and select that instead.')
 
@@ -362,7 +361,7 @@ export default class IPC {
   }
 
   async getDeviceInfo () {
-    const { model, speed } = os.cpus()[0]!
+    const { model, speed } = os.cpus()[0] ?? { model: 'Unknown', speed: 0 }
     return {
       features: app.getGPUFeatureStatus(),
       info: await app.getGPUInfo('complete'),

@@ -1,23 +1,24 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
-import { childTransport } from '../src/main/torrent/transport.ts'
-import { expose, wrap, proxy } from 'abslink'
 import { EventEmitter } from 'node:events'
-
-// Exercise the same advanced serialization used on the real inherited pipe.
+import test from 'node:test'
 import { serialize, deserialize } from 'node:v8'
+
+import { expose, wrap, proxy } from 'abslink'
+
+import { childTransport } from '../src/main/torrent/transport.ts'
 /** @param {unknown} value */
+// Exercise the same advanced serialization used on the real inherited pipe.
 const clone = value => deserialize(serialize(value))
 
 test('torrent pipe carries binary results, callbacks and remote errors', async () => {
-  const endpoint = Object.assign(new EventEmitter(), { postMessage: (/** @type {unknown} */ data) => { void data } })
+  const endpoint = Object.assign(new EventEmitter(), { postMessage: (/** @type {unknown} */ data) => { return data } })
   const child = childTransport(packet => queueMicrotask(() => endpoint.emit('message', clone(packet.data))))
   endpoint.postMessage = data => queueMicrotask(() => child.receive(clone({ kind: 'port', port: 1, data })))
   child.parent.on('message', ({ ports }) => {
     const port = ports[0]
     expose({
       binary: () => new Uint8Array([0, 128, 255]),
-      callback: async (/** @type {(value: string) => Promise<void>} */ cb) => { await cb('torrent'); return 'done' },
+      callback: async (/** @type {(value: string) => Promise<void>} */ notify) => { await notify('torrent'); return 'done' },
       fail: () => { throw new Error('expected failure') }
     }, {
       on: (name, fn) => port.on(name, /** @param {{ data: unknown }} event */ event => fn(event.data)),

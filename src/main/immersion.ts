@@ -156,11 +156,16 @@ export class ImmersionOutbox {
   migrateCurrentDayBaseline (input: ImmersionDailyBaseline) {
     validateBaseline(input)
     if (input.date !== berlinDateKey()) throw new Error('Only the current Berlin day can be migrated')
-    const marker = `daily-baseline:${input.date}`
-    if (this.db.prepare('SELECT 1 FROM migration_markers WHERE marker=?').get(marker)) return false
+    const marker = 'daily-baseline-v2'
     const occurredAt = new Date().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      // This is a one-time migration, including installations that used dated
+      // markers. A zero-total first migration also permanently closes the gate.
+      if (this.db.prepare("SELECT 1 FROM migration_markers WHERE marker=? OR marker GLOB 'daily-baseline:*' LIMIT 1").get(marker)) {
+        this.db.exec('COMMIT')
+        return false
+      }
       for (const [mode, seconds] of [['mining', input.miningSeconds], ['standard', input.standardSeconds]] as const) {
         if (seconds <= 0) continue
         const payload = {

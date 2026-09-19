@@ -1,5 +1,5 @@
 // Run in Electron against a temporary esbuild bundle of src/main/immersion.ts.
-/* eslint-disable @typescript-eslint/no-require-imports -- Electron main-process harness uses CommonJS. */
+
 const assert = require('node:assert/strict')
 const { randomBytes } = require('node:crypto')
 const { mkdtempSync, readFileSync, statSync, rmSync } = require('node:fs')
@@ -34,6 +34,29 @@ app.whenReady().then(async () => {
   const endpoint = `http://127.0.0.1:${server.address().port}`
   let outbox
   try {
+    // A baseline is a one-time handover, including zero totals and old dated markers.
+    const baseline = { date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()), miningSeconds: 12, standardSeconds: 34 }
+    for (const zero of [false, true]) {
+      const path = join(directory, `baseline-${zero}.sqlite3`)
+      let migration = new ImmersionOutbox(path, '', '')
+      assert.equal(migration.migrateCurrentDayBaseline(zero ? { ...baseline, miningSeconds: 0, standardSeconds: 0 } : baseline), true)
+      const pending = migration.state().pending
+      assert.equal(pending, zero ? 0 : 2)
+      migration.close()
+      migration = new ImmersionOutbox(path, '', '')
+      assert.equal(migration.migrateCurrentDayBaseline(baseline), false)
+      assert.equal(migration.state().pending, pending)
+      migration.close()
+    }
+    const datedPath = join(directory, 'dated-baseline.sqlite3')
+    new ImmersionOutbox(datedPath, '', '').close()
+    const dated = new DatabaseSync(datedPath)
+    dated.prepare('INSERT INTO migration_markers VALUES(?,?)').run('daily-baseline:2000-01-01', '2000-01-01T12:00:00Z')
+    dated.close()
+    const migrated = new ImmersionOutbox(datedPath, '', '')
+    assert.equal(migrated.migrateCurrentDayBaseline(baseline), false, 'An older date must prevent another migration')
+    assert.equal(migrated.state().pending, 0)
+    migrated.close()
     // Isolated upgrade fixture: preserve pre-existing episode evidence and let
     // already known shows continue reporting without another threshold.
     const legacyPath = join(directory, 'legacy.sqlite3')
