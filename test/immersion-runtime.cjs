@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict')
 const { randomBytes } = require('node:crypto')
-const { mkdtempSync, readFileSync, statSync, rmSync } = require('node:fs')
+const { mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } = require('node:fs')
 const { createServer } = require('node:http')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
@@ -18,9 +18,19 @@ app.whenReady().then(async () => {
   const token = randomBytes(32).toString('hex')
   const received = []
   let expectedToken = token
+  let rateLimitOnce = false
   const server = createServer(async (request, response) => {
+    if (request.url !== '/v1/client/sources/hayatan/events') {
+      response.writeHead(404).end()
+      return
+    }
     if (request.headers.authorization !== `Bearer ${expectedToken}`) {
       response.writeHead(401).end()
+      return
+    }
+    if (rateLimitOnce) {
+      rateLimitOnce = false
+      response.writeHead(429, { 'Retry-After': '20' }).end()
       return
     }
     let body = ''
@@ -140,7 +150,38 @@ app.whenReady().then(async () => {
       await outbox.flush()
     }
     assert.equal(received.filter(event => event.event_type === 'episode_completed').length, 1)
-    console.log('PASS: reporting threshold, cross-mode total, held restart, release original events, resumed completion and replay dedupe; encrypted storage, file permissions, restart persistence, empty test request, token rotation/removal, URL validation, offline event recovery and acknowledgement')
+
+    // HTTP 429 honors Retry-After when rescheduling outbox rows.
+    rateLimitOnce = true
+    outbox.recordSegment({ externalMediaId: 'test-media', displayName: 'Test', episode: 4, mode: 'standard', wallMilliseconds: 5000, contentStartSeconds: 1300, contentEndSeconds: 1305, durationSeconds: 1440 })
+    await new Promise(resolve => setTimeout(resolve, 40))
+    assert.equal(outbox.state().pending, 1)
+    outbox.close()
+    outbox = undefined
+    const rateLimitedDb = new DatabaseSync(join(directory, 'immersion.sqlite3'))
+    const rateLimitedRow = rateLimitedDb.prepare('SELECT next_attempt_at, last_error FROM outbox').get()
+    rateLimitedDb.close()
+    assert.equal(rateLimitedRow.last_error, 'HTTP 429')
+    assert.equal(rateLimitedRow.next_attempt_at >= Date.now() + 18_000, true)
+
+    // Legacy private Tailnet endpoints migrate automatically to public api.berlinpcs.dev while retaining encrypted token & pending outbox rows.
+    for (const [index, legacyOrigin] of ['https://ankilock.priv.berlinpcs.dev', 'https://homelab-1-vnic.tail1661de.ts.net'].entries()) {
+      const migrateDir = join(directory, `migrate-${index}`)
+      mkdirSync(migrateDir, { recursive: true })
+      const seed = new ImmersionOutbox(join(migrateDir, 'immersion.sqlite3'), legacyOrigin, expectedToken)
+      seed.recordSegment({ externalMediaId: 'held-show', displayName: 'Held Show', episode: 1, mode: 'mining', wallMilliseconds: 5000, contentStartSeconds: 0, contentEndSeconds: 5, durationSeconds: 1440 })
+      seed.close()
+      writeFileSync(join(migrateDir, 'immersion-connection.json'), JSON.stringify({ endpoint: legacyOrigin }), { mode: 0o600 })
+      const reopened = new ImmersionOutbox(join(migrateDir, 'immersion.sqlite3'), '', '')
+      assert.equal(reopened.state().endpoint, 'https://api.berlinpcs.dev')
+      assert.equal(reopened.state().tokenConfigured, true)
+      assert.equal(reopened.state().pending, 1)
+      reopened.close()
+      assert.equal(JSON.parse(readFileSync(join(migrateDir, 'immersion-connection.json'), 'utf8')).endpoint, 'https://api.berlinpcs.dev')
+      assert.equal(statSync(join(migrateDir, 'immersion-connection.json')).mode & 0o777, 0o600)
+    }
+
+    console.log('PASS: reporting threshold, cross-mode total, held restart, release original events, resumed completion, replay dedupe, 429 Retry-After backoff, legacy endpoint auto-migration, encrypted storage, file permissions, restart persistence, empty test request, token rotation/removal, URL validation, offline event recovery and acknowledgement')
   } finally {
     outbox?.close()
     await new Promise(resolve => server.close(resolve))
@@ -149,6 +190,6 @@ app.whenReady().then(async () => {
   rmSync(directory, { recursive: true, force: true })
   app.exit(0)
 }).catch(error => {
-  console.error(error.message)
+  console.error(error?.stack ?? error?.message ?? error)
   app.exit(1)
 })

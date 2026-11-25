@@ -1,11 +1,13 @@
 import { once } from 'node:events'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import process, { platform } from 'node:process'
+import { pathToFileURL } from 'node:url'
 
 import { electronApp, is } from '@electron-toolkit/utils'
 import electronShutdownHandler from '@paymoapp/electron-shutdown-handler'
 import { expose } from 'abslink/electron'
-import { BrowserWindow, MessageChannelMain, app, dialog, ipcMain, powerMonitor, shell, Tray, Menu, protocol, nativeImage, session, nativeTheme, webFrame } from 'electron' // type NativeImage, Notification, nativeImage,
+import { BrowserWindow, MessageChannelMain, app, dialog, ipcMain, powerMonitor, shell, Tray, Menu, protocol, nativeImage, session, nativeTheme, webFrame, net } from 'electron' // type NativeImage, Notification, nativeImage,
 import log from 'electron-log/main'
 import { autoUpdater } from 'electron-updater'
 
@@ -20,6 +22,7 @@ import HoshidictsSupervisor, { resolveHoshidictsExecutable } from './hoshidicts/
 // import Protocol from './protocol.ts'
 import { ImmersionOutbox } from './immersion.ts'
 import IPC from './ipc.ts'
+import { localInterfaceAsset } from './local-interface.ts'
 import { mediaMimeType, MiningAnkiService } from './mining-anki.ts'
 import { localAudioResponse, MiningAudioRepository, readBoundedResponseBytes } from './mining-audio.ts'
 import { MAX_MINING_MEDIA_BYTES, MiningMediaEncoder, resolveMiningMediaExecutable } from './mining-media.ts'
@@ -416,7 +419,19 @@ export default class App {
     if (is.dev) this.mainWindow.webContents.openDevTools()
     // Local preview must never silently boot an obsolete offline service-worker
     // build. Keep application settings/IndexedDB intact; clear only web caches.
-    const prepareInterface = is.dev
+    const interfaceRoot = join(process.resourcesPath, 'interface')
+    const bundledInterface = app.isPackaged && existsSync(join(interfaceRoot, 'index.html'))
+    if (bundledInterface) {
+      this.mainWindow.webContents.session.protocol.handle('https', async request => {
+        if (new URL(request.url).origin !== BASE_ORIGIN || !['GET', 'HEAD'].includes(request.method)) {
+          return await net.fetch(request, { bypassCustomProtocolHandlers: true })
+        }
+        const asset = await localInterfaceAsset(interfaceRoot, request.url)
+        return asset ? await net.fetch(pathToFileURL(asset).href) : new Response('Not found', { status: 404 })
+      })
+      log.info('[interface] Using bundled local interface')
+    }
+    const prepareInterface = is.dev || bundledInterface
       ? Promise.all([
         this.mainWindow.webContents.session.clearStorageData({ origin: BASE_ORIGIN, storages: ['serviceworkers', 'cachestorage'] }),
         this.mainWindow.webContents.session.clearCache()

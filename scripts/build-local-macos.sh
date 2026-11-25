@@ -17,6 +17,8 @@ if [[ -z "$identity" || "$identity" == - ]]; then
 fi
 export HAYATAN_MAC_SIGNING_IDENTITY="$identity"
 export MAIN_VITE_INTERFACE_URL=${MAIN_VITE_INTERFACE_URL:-https://hayatan.berlinpcs.workers.dev/}
+npm --prefix ../interface run build
 npm run build
 CSC_IDENTITY_AUTO_DISCOVERY=false node_modules/.bin/electron-builder --mac --arm64 --dir -c.mac.identity=- -c.mac.notarize=false
+ditto ../interface/build dist/mac-arm64/Hayatan.app/Contents/Resources/interface
 bash scripts/sign-local-macos.sh dist/mac-arm64/Hayatan.app

@@ -1,6 +1,6 @@
 {
   "name": "hayatan",
-  "version": "7.1.7",
+  "version": "7.1.9",
   "description": "Hayatan - Torrent streaming made simple",
   "main": "./out/main/index.js",
   "repository": "github:BerlinPCS/electron",
@@ -89,7 +89,8 @@
       }
     },
     "patchedDependencies": {
-      "torrent-client@1.0.0": "patches/torrent-client@1.0.0.patch"
+      "torrent-client@1.0.0": "patches/torrent-client@1.0.0.patch",
+      "abslink@1.2.2": "patches/abslink@1.2.2.patch"
     }
   },
   "dependencies": {

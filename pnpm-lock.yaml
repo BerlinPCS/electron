@@ -32,6 +32,9 @@ overrides:
 packageExtensionsChecksum: sha256-D2afdKdrh897r+Ftl0KrslxwejdeNjTbk45gj2csuSs=
 
 patchedDependencies:
+  abslink@1.2.2:
+    hash: 04277fbf12d30e4cc526d5a38b4ac53521252203de89696cee5c6414a48e1558
+    path: patches/abslink@1.2.2.patch
   torrent-client@1.0.0:
     hash: 2d15d872e20cef6856ce0e7d2db697ac3e26da2fe983e1885421a278eccfc0c9
     path: patches/torrent-client@1.0.0.patch
@@ -73,7 +76,7 @@ importers:
         version: 1.3.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       abslink:
         specifier: file:npm-package-cache/abslink-1.2.2.tgz
-        version: file:npm-package-cache/abslink-1.2.2.tgz
+        version: file:npm-package-cache/abslink-1.2.2.tgz(patch_hash=04277fbf12d30e4cc526d5a38b4ac53521252203de89696cee5c6414a48e1558)
       bittorrent-tracker:
         specifier: ^11.2.3
         version: 11.2.3
@@ -5619,7 +5622,7 @@ snapshots:
     dependencies:
       event-target-shim: 5.0.1
 
-  abslink@file:npm-package-cache/abslink-1.2.2.tgz: {}
+  abslink@file:npm-package-cache/abslink-1.2.2.tgz(patch_hash=04277fbf12d30e4cc526d5a38b4ac53521252203de89696cee5c6414a48e1558): {}
 
   acorn-jsx@5.3.2(acorn@8.16.0):
     dependencies:

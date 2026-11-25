@@ -1,0 +1,44 @@
+diff --git a/src/abslink.js b/src/abslink.js
+--- a/src/abslink.js
++++ b/src/abslink.js
+@@ -122,7 +122,7 @@
+                 // detach and deactive after sending release response above.
+                 ep.off('message', callback);
+                 obj[finalizer]?.();
+-                ep.close?.();
++                if (rootMarkerID === undefined) ep.close?.();
+             }
+         })
+             .catch(_ => {
+@@ -138,7 +138,7 @@
+ }
+ export function wrap(endpoint, rootMarkerID) {
+     const pendingListeners = new Map();
+-    endpoint.on('message', (data) => {
++    const receive = (data) => {
+         if (!data?.id) {
+             return;
+         }
+@@ -152,8 +152,9 @@
+         finally {
+             pendingListeners.delete(data.id);
+         }
+-    });
+-    return createProxy({ endpoint, pendingListeners, rootMarkerID });
++    };
++    endpoint.on('message', receive);
++    return createProxy({ endpoint, pendingListeners, rootMarkerID, dispose: () => endpoint.off('message', receive) });
+ }
+ function throwIfProxyReleased(isReleased) {
+     if (isReleased) {
+@@ -162,7 +163,9 @@
+ }
+ async function releaseEndpoint(epWithPendingListeners) {
+     await requestResponseMessage(epWithPendingListeners, { type: MessageType.RELEASE });
+-    epWithPendingListeners.endpoint.close?.();
++    epWithPendingListeners.dispose?.();
++    // Callback proxies share the root endpoint; releasing one must not close it.
++    if (epWithPendingListeners.rootMarkerID === undefined) epWithPendingListeners.endpoint.close?.();
+ }
+ const proxyCounter = new WeakMap();
+ const proxyFinalizers = 'FinalizationRegistry' in globalThis &&

@@ -7,6 +7,24 @@ import { safeStorage } from 'electron'
 
 import { hasWatchedEnding, mergeRanges, splitAtBerlinMidnight } from './immersion-ranges.ts'
 
+const DEFAULT_ENDPOINT = 'https://api.berlinpcs.dev'
+const LEGACY_PRIVATE_ENDPOINTS = new Set([
+  'https://ankilock.priv.berlinpcs.dev',
+  'https://homelab-1-vnic.tail1661de.ts.net'
+])
+const HAYATAN_EVENTS_PATH = '/v1/client/sources/hayatan/events'
+
+class HttpStatusError extends Error {
+  readonly status: number
+  readonly retryAfterMs: number
+
+  constructor (status: number, retryAfterMs = 0) {
+    super(`HTTP ${status}`)
+    this.status = status
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
 export interface ImmersionSegment {
   externalMediaId: string
   displayName: string
@@ -59,7 +77,13 @@ export class ImmersionOutbox {
     this.configPath = join(directory, 'immersion-connection.json')
     this.tokenPath = join(directory, 'immersion-token.bin')
     const stored = loadConnection(this.configPath)
-    this.endpoint = normalizeEndpoint(endpoint || stored.endpoint)
+    const normalized = normalizeEndpoint(endpoint || stored.endpoint)
+    if (!endpoint && LEGACY_PRIVATE_ENDPOINTS.has(normalized)) {
+      this.endpoint = DEFAULT_ENDPOINT
+      persistConnection(this.configPath, { endpoint: this.endpoint })
+    } else {
+      this.endpoint = normalized
+    }
     this.token = loadToken(this.tokenPath, token)
     if (endpoint) persistConnection(this.configPath, { endpoint: this.endpoint })
     this.db = new DatabaseSync(path)
@@ -221,7 +245,7 @@ export class ImmersionOutbox {
 
   async testConnection () {
     if (!this.endpoint || !this.token) throw new Error('Configure both the backend URL and source token first')
-    const response = await fetch(`${this.endpoint}/v1/immersion/sources/hayatan/events`, {
+    const response = await fetch(`${this.endpoint.replace(/\/$/, '')}${HAYATAN_EVENTS_PATH}`, {
       method: 'POST',
       signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
@@ -242,13 +266,16 @@ export class ImmersionOutbox {
       const rows = this.db.prepare('SELECT event_id,payload_json,attempts FROM outbox WHERE next_attempt_at<=? AND (json_extract(payload_json,\'$.event_type\')=\'daily_baseline\' OR EXISTS (SELECT 1 FROM media_reporting m WHERE m.external_media_id=json_extract(payload_json,\'$.external_media_id\') AND m.qualified=1)) ORDER BY created_at LIMIT 128')
         .all(Date.now()) as Array<{ event_id: string, payload_json: string, attempts: number }>
       if (!rows.length) return
-      const response = await fetch(`${this.endpoint.replace(/\/$/, '')}/v1/immersion/sources/hayatan/events`, {
+      const response = await fetch(`${this.endpoint.replace(/\/$/, '')}${HAYATAN_EVENTS_PATH}`, {
         method: 'POST',
         signal: AbortSignal.timeout(30_000),
         headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: rows.map(row => JSON.parse(row.payload_json)) })
       })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      if (!response.ok) {
+        const retryAfterMs = response.status === 429 ? parseRetryAfterMs(response.headers.get('retry-after')) : 0
+        throw new HttpStatusError(response.status, retryAfterMs)
+      }
       const result = await response.json() as { accepted: string[], duplicates: string[], rejected?: Array<{ event_id: string, error: string }> }
       const requested = new Set(rows.map(row => row.event_id))
       const remove = [...result.accepted, ...result.duplicates].filter(id => requested.has(id))
@@ -272,10 +299,12 @@ export class ImmersionOutbox {
       } catch (error) { this.db.exec('ROLLBACK'); throw error }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const extraDelayMs = error instanceof HttpStatusError ? error.retryAfterMs : 0
       const rows = this.db.prepare('SELECT event_id,attempts FROM outbox WHERE next_attempt_at<=? AND (json_extract(payload_json,\'$.event_type\')=\'daily_baseline\' OR EXISTS (SELECT 1 FROM media_reporting m WHERE m.external_media_id=json_extract(payload_json,\'$.external_media_id\') AND m.qualified=1)) ORDER BY created_at LIMIT 128')
         .all(Date.now()) as Array<{ event_id: string, attempts: number }>
       const statement = this.db.prepare('UPDATE outbox SET attempts=attempts+1,last_error=?,next_attempt_at=? WHERE event_id=?')
-      for (const row of rows) statement.run(message.slice(0, 500), Date.now() + retryDelay(row.attempts), row.event_id)
+      const now = Date.now()
+      for (const row of rows) statement.run(message.slice(0, 500), now + Math.max(retryDelay(row.attempts), extraDelayMs), row.event_id)
     } finally { this.sending = false }
   }
 
@@ -387,4 +416,13 @@ function berlinDateKey (date = new Date()) {
 
 function retryDelay (attempts: number) {
   return Math.min(900, 15 * (2 ** Math.min(attempts, 6))) * 1000
+}
+
+function parseRetryAfterMs (header: string | null) {
+  if (!header) return 0
+  const trimmed = header.trim()
+  if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed), 900) * 1000
+  const dateMs = Date.parse(trimmed)
+  if (!Number.isFinite(dateMs)) return 0
+  return Math.max(0, Math.min(dateMs - Date.now(), 900_000))
 }
